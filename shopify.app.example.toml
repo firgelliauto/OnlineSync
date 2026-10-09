@@ -1,0 +1,25 @@
+# Copy to shopify.app.toml after creating a NEW public app in Shopify Dev Dashboard.
+# Do not reuse the client ID of the existing two-store Firgelli app.
+client_id = "REPLACE_WITH_PUBLIC_APP_CLIENT_ID"
+name = "OnlineSync"
+application_url = "https://REPLACE_WITH_WORKER_HOST/"
+embedded = true
+
+[access_scopes]
+scopes = "read_products,write_products,read_inventory,write_inventory,read_locations"
+use_legacy_install_flow = false
+
+[webhooks]
+api_version = "2026-07"
+
+[[webhooks.subscriptions]]
+topics = ["inventory_levels/update"]
+uri = "/webhooks/inventory"
+
+[[webhooks.subscriptions]]
+topics = ["app/uninstalled"]
+uri = "/webhooks/uninstalled"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
+uri = "/webhooks/compliance"

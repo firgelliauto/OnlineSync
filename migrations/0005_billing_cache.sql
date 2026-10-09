@@ -1,0 +1,2 @@
+ALTER TABLE sync_groups ADD COLUMN billing_checked_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sync_groups ADD COLUMN billing_active INTEGER NOT NULL DEFAULT 0;

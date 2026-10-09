@@ -1,0 +1,355 @@
+import { verifySessionToken, verifyWebhook, validShop } from './security.mjs';
+import { exchangeOfflineToken, listLocations, saveToken } from './shopify.mjs';
+import { listEligibleVariants, matchingCatalogs } from './catalog.mjs';
+import { createPairingCode, redeemPairingCode } from './pairing.mjs';
+import { appPage } from './app-page.mjs';
+import { activeSubscription } from './billing.mjs';
+import { enqueueLinks, processLink } from './inventory.mjs';
+
+const json = (data, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
+const invalidSession = () => new Response(JSON.stringify({ error: 'Invalid Shopify session' }), {
+  status: 401, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store',
+    'X-Shopify-Retry-Invalid-Session-Request': '1' }
+});
+
+async function currentGroup(db, shop) {
+  return db.prepare(`SELECT g.id, g.main_shop, g.status, g.preview_completed_at,
+    gs.role, gs.location_id
+    FROM group_stores gs JOIN sync_groups g ON g.id = gs.group_id WHERE gs.shop = ?`)
+    .bind(shop).first();
+}
+
+async function bootstrap(db, shop, token, env) {
+  const store = await db.prepare('SELECT uninstalled_at FROM stores WHERE shop = ?').bind(shop).first();
+  if (!store || store.uninstalled_at) {
+    await saveToken(db, shop, await exchangeOfflineToken(shop, token, env), env);
+  }
+  let group = await currentGroup(db, shop);
+  if (!group) {
+    const groupId = crypto.randomUUID();
+    await db.prepare('INSERT OR IGNORE INTO sync_groups (id, main_shop) VALUES (?, ?)')
+      .bind(groupId, shop).run();
+    const ownerGroup = await db.prepare('SELECT id FROM sync_groups WHERE main_shop = ?').bind(shop).first();
+    await db.prepare(`INSERT OR IGNORE INTO group_stores (group_id, shop, role)
+      VALUES (?, ?, 'main')`).bind(ownerGroup.id, shop).run();
+    group = await currentGroup(db, shop);
+  }
+  return group;
+}
+
+async function status(db, shop, env) {
+  const group = await currentGroup(db, shop);
+  if (!group) throw new Error('No sync group found');
+  const [members, counts, recent] = await Promise.all([
+    db.prepare(`SELECT gs.shop, gs.role, gs.location_id, s.uninstalled_at FROM group_stores gs
+      JOIN stores s ON s.shop = gs.shop WHERE gs.group_id = ? ORDER BY gs.role DESC, gs.shop`)
+      .bind(group.id).all(),
+    db.prepare(`SELECT COUNT(*) AS links, SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked
+      FROM inventory_links WHERE group_id = ?`).bind(group.id).first(),
+    db.prepare(`SELECT event_type, detail, created_at FROM sync_events WHERE group_id = ?
+      ORDER BY id DESC LIMIT 20`).bind(group.id).all()
+  ]);
+  let billing;
+  try { billing = await activeSubscription(db, group.main_shop, env); }
+  catch (error) { console.error('Billing check failed', error); billing = { state: 'unavailable', active: false }; }
+  return { currentShop: shop, group: { id: group.id, mainShop: group.main_shop, role: group.role,
+      status: group.status, billing },
+    stores: members.results, links: Number(counts.links), blocked: Number(counts.blocked ?? 0),
+    recent: recent.results, inventoryWritesEnabled: env.INVENTORY_WRITES_ENABLED === 'true' };
+}
+
+async function preview(db, group, env) {
+  if (group.role !== 'main') return json({ error: 'Open the main store to prepare a preview' }, 403);
+  if (group.status !== 'setup' && group.status !== 'paused') return json({ error: 'Pause syncing first' }, 409);
+  const existingActive = await db.prepare(`SELECT 1 AS found FROM inventory_links
+    WHERE group_id = ? AND status <> 'preview' LIMIT 1`).bind(group.id).first();
+  if (existingActive) return json({ error: 'Existing active links must be reviewed before rebuilding the preview' }, 409);
+  const members = (await db.prepare(`SELECT shop, role, location_id FROM group_stores
+    WHERE group_id = ? ORDER BY role DESC, shop`).bind(group.id).all()).results;
+  if (members.length < 2 || members.some(m => !m.location_id)) {
+    return json({ error: 'Connect at least two stores and choose a location in each' }, 409);
+  }
+  const main = members.find(m => m.role === 'main');
+  const children = members.filter(m => m.role === 'child');
+  const [source, ...targets] = await Promise.all(members.map(m =>
+    listEligibleVariants(db, m.shop, m.location_id, env)));
+  const matches = matchingCatalogs(source, targets);
+  if (matches.length > 10000) return json({ error: 'Catalog exceeds current preview limit' }, 413);
+  // This operation records a read-only plan. No Shopify inventory mutation is called.
+  await db.prepare('UPDATE sync_groups SET preview_completed_at = NULL WHERE id = ?')
+    .bind(group.id).run();
+  await db.prepare('DELETE FROM inventory_links WHERE group_id = ? AND status = ?')
+    .bind(group.id, 'preview').run();
+  for (let offset = 0; offset < matches.length; offset += 100) {
+    const chunk = matches.slice(offset, offset + 100).map(match => ({ ...match, id: crypto.randomUUID() }));
+    const linkValues = chunk.flatMap(row => [row.id, group.id, row.sku, row.source.quantity]);
+    const linkSql = `INSERT INTO inventory_links
+      (id, group_id, sku, shared_quantity, status) VALUES ${
+        chunk.map(() => "(?, ?, ?, ?, 'preview')").join(', ')}`;
+    const memberRows = chunk.flatMap(row => [
+      [row.id, main.shop, row.source.itemId, main.location_id, row.source.quantity],
+      ...children.map((child, i) => [row.id, child.shop, row.children[i].itemId,
+        child.location_id, row.children[i].quantity])
+    ]);
+    const statements = [db.prepare(linkSql).bind(...linkValues)];
+    for (let i = 0; i < memberRows.length; i += 100) {
+      const batch = memberRows.slice(i, i + 100);
+      const memberSql = `INSERT INTO inventory_members
+        (link_id, shop, inventory_item_id, location_id, last_quantity) VALUES ${
+          batch.map(() => '(?, ?, ?, ?, ?)').join(', ')}`;
+      statements.push(db.prepare(memberSql).bind(...batch.flat()));
+    }
+    await db.batch(statements);
+  }
+  await db.prepare(`INSERT INTO sync_events (group_id, shop, event_type, detail)
+    VALUES (?, ?, 'preview', ?)`).bind(group.id, main.shop,
+      `Read-only preview prepared for ${matches.length} unique matching SKUs`).run();
+  await db.prepare('UPDATE sync_groups SET preview_completed_at = CURRENT_TIMESTAMP WHERE id = ?')
+    .bind(group.id).run();
+  return json({ matched: matches.length, mainEligible: source.size,
+    sample: matches.slice(0, 30).map(m => ({ sku: m.sku, mainQuantity: m.source.quantity,
+      childQuantities: m.children.map(c => c.quantity) })) });
+}
+
+async function control(db, group, env, input) {
+  if (group.role !== 'main') return json({ error: 'Open the main store to control syncing' }, 403);
+  if (input.action === 'pause') {
+    await db.prepare("UPDATE sync_groups SET status = 'paused' WHERE id = ?").bind(group.id).run();
+    return json(await status(db, group.main_shop, env));
+  }
+  if (input.action !== 'start') return json({ error: 'Unknown action' }, 400);
+  if (env.INVENTORY_WRITES_ENABLED !== 'true') return json({ error: 'Inventory writes are disabled in deployment settings' }, 409);
+  const subscription = await activeSubscription(db, group.main_shop, env, { force: true });
+  if (!subscription.active) return json({ error: 'An active Shopify subscription is required' }, 402);
+  const stores = (await db.prepare(`SELECT gs.shop, gs.location_id, s.uninstalled_at
+    FROM group_stores gs JOIN stores s ON s.shop = gs.shop WHERE gs.group_id = ?`)
+    .bind(group.id).all()).results;
+  if (stores.length < 2 || stores.some(s => !s.location_id || s.uninstalled_at)) {
+    return json({ error: 'Connect and configure at least two installed stores' }, 409);
+  }
+  const links = (await db.prepare(`SELECT id FROM inventory_links
+    WHERE group_id = ? AND status IN ('preview', 'active')`).bind(group.id).all()).results;
+  if (!links.length) return json({ error: 'Prepare a read-only preview first' }, 409);
+  const previewLink = await db.prepare(`SELECT 1 AS found FROM inventory_links
+    WHERE group_id = ? AND status = 'preview' LIMIT 1`).bind(group.id).first();
+  if (previewLink && !group.preview_completed_at) {
+    return json({ error: 'Finish the read-only preview first' }, 409);
+  }
+  await db.batch([
+    db.prepare("UPDATE inventory_links SET status = 'active' WHERE group_id = ? AND status = 'preview'")
+      .bind(group.id),
+    db.prepare("UPDATE sync_groups SET status = 'active' WHERE id = ?").bind(group.id),
+    db.prepare(`INSERT OR IGNORE INTO sync_jobs (link_id, dirty)
+      SELECT id, 1 FROM inventory_links WHERE group_id = ? AND status = 'active'`)
+      .bind(group.id),
+    db.prepare(`UPDATE sync_jobs SET dirty = 1 WHERE link_id IN
+      (SELECT id FROM inventory_links WHERE group_id = ? AND status = 'active')`)
+      .bind(group.id)
+  ]);
+  await enqueueLinks(env, links.map(x => x.id));
+  return json(await status(db, group.main_shop, env));
+}
+
+async function merchantApi(request, env, path) {
+  const authorization = request.headers.get('Authorization') ?? '';
+  const idToken = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+  const user = await verifySessionToken(idToken, env.SHOPIFY_CLIENT_ID, env.SHOPIFY_CLIENT_SECRET);
+  if (!user) return invalidSession();
+  const db = env.DB;
+  try {
+    if (path === '/api/bootstrap' && request.method === 'POST') {
+      await bootstrap(db, user.shop, idToken, env);
+      return json(await status(db, user.shop, env));
+    }
+    const store = await db.prepare('SELECT shop FROM stores WHERE shop = ? AND uninstalled_at IS NULL')
+      .bind(user.shop).first();
+    if (!store) return json({ error: 'Open the app again to finish installation' }, 409);
+    const group = await currentGroup(db, user.shop);
+    if (!group) return json({ error: 'Store is not in a sync group' }, 409);
+    if (path === '/api/status' && request.method === 'GET') return json(await status(db, user.shop, env));
+    if (path === '/api/locations' && request.method === 'GET') {
+      return json({ locations: await listLocations(db, user.shop, env) });
+    }
+    if (path === '/api/location' && request.method === 'POST') {
+      const input = await request.json();
+      const locations = await listLocations(db, user.shop, env);
+      if (!locations.some(x => x.id === input.locationId && x.isActive)) {
+        return json({ error: 'Choose an active location from this store' }, 400);
+      }
+      const activeLink = await db.prepare(`SELECT 1 AS found FROM inventory_links
+        WHERE group_id = ? AND status <> 'preview' LIMIT 1`).bind(group.id).first();
+      if (activeLink) return json({ error: 'Pause and review active links before changing locations' }, 409);
+      await db.batch([
+        db.prepare('UPDATE group_stores SET location_id = ? WHERE shop = ?')
+          .bind(input.locationId, user.shop),
+        db.prepare("DELETE FROM inventory_links WHERE group_id = ? AND status = 'preview'")
+          .bind(group.id),
+        db.prepare('UPDATE sync_groups SET preview_completed_at = NULL WHERE id = ?')
+          .bind(group.id)
+      ]);
+      return json(await status(db, user.shop, env));
+    }
+    if (path === '/api/pairing-code' && request.method === 'POST') {
+      if (group.role !== 'main') return json({ error: 'Only the main store can create a code' }, 403);
+      return json(await createPairingCode(db, group.id));
+    }
+    if (path === '/api/join' && request.method === 'POST') {
+      if (group.role !== 'main') return json({ error: 'Store is already connected' }, 409);
+      const memberCount = await db.prepare('SELECT COUNT(*) AS count FROM group_stores WHERE group_id = ?')
+        .bind(group.id).first();
+      if (Number(memberCount.count) !== 1) return json({ error: 'Store already has connections' }, 409);
+      const input = await request.json();
+      const joined = await redeemPairingCode(db, user.shop, group.id,
+        String(input.code ?? '').trim().toUpperCase());
+      if (!joined) return json({ error: 'Code invalid or expired' }, 400);
+      const newGroup = await currentGroup(db, user.shop);
+      await db.batch([
+        db.prepare("DELETE FROM inventory_links WHERE group_id = ? AND status = 'preview'")
+          .bind(newGroup.id),
+        db.prepare('UPDATE sync_groups SET preview_completed_at = NULL WHERE id = ?')
+          .bind(newGroup.id)
+      ]);
+      return json(await status(db, user.shop, env));
+    }
+    if (path === '/api/preview' && request.method === 'POST') return preview(db, group, env);
+    if (path === '/api/control' && request.method === 'POST') {
+      return control(db, group, env, await request.json());
+    }
+    return json({ error: 'Not found' }, 404);
+  } catch (error) {
+    console.error('Merchant API error', error);
+    if (error instanceof SyntaxError) return json({ error: 'Invalid JSON' }, 400);
+    return json({ error: error.message || 'Request failed' }, 500);
+  }
+}
+
+async function webhook(request, env, path) {
+  const raw = await request.arrayBuffer();
+  if (raw.byteLength > 1_000_000) return json({ error: 'Payload too large' }, 413);
+  if (!await verifyWebhook(raw, request.headers.get('X-Shopify-Hmac-Sha256'),
+    env.SHOPIFY_CLIENT_SECRET)) return json({ error: 'Invalid webhook signature' }, 401);
+  const shop = request.headers.get('X-Shopify-Shop-Domain');
+  const topic = request.headers.get('X-Shopify-Topic');
+  if (!validShop(shop)) return json({ error: 'Invalid shop' }, 400);
+  const db = env.DB;
+  const payload = JSON.parse(new TextDecoder().decode(raw));
+  if (path === '/webhooks/uninstalled' && topic === 'app/uninstalled') {
+    const membership = await currentGroup(db, shop);
+    if (membership) await db.prepare("UPDATE sync_groups SET status = 'paused' WHERE id = ?")
+      .bind(membership.id).run();
+    await db.prepare(`UPDATE stores SET uninstalled_at = CURRENT_TIMESTAMP,
+      access_token_cipher = '', refresh_token_cipher = '', token_expires_at = 0,
+      refresh_expires_at = 0 WHERE shop = ?`).bind(shop).run();
+    return json({ ok: true });
+  }
+  if (path === '/webhooks/compliance') {
+    if (topic === 'shop/redact') {
+      const membership = await currentGroup(db, shop);
+      if (membership?.role === 'main') {
+        await db.prepare('DELETE FROM sync_events WHERE group_id = ?').bind(membership.id).run();
+        await db.prepare('DELETE FROM sync_groups WHERE id = ?').bind(membership.id).run();
+      } else if (membership) {
+        await db.prepare('DELETE FROM inventory_links WHERE group_id = ?').bind(membership.id).run();
+        await db.prepare("UPDATE sync_groups SET status = 'paused' WHERE id = ?")
+          .bind(membership.id).run();
+        await db.prepare('DELETE FROM group_stores WHERE shop = ?').bind(shop).run();
+      }
+      await db.prepare('DELETE FROM stores WHERE shop = ?').bind(shop).run();
+      await db.prepare('DELETE FROM sync_events WHERE shop = ?').bind(shop).run();
+      await db.prepare('DELETE FROM webhook_deliveries WHERE shop = ?').bind(shop).run();
+    }
+    // The app stores no customer or order records; customer requests need no data export.
+    return json({ ok: true });
+  }
+  if (path === '/webhooks/inventory' && topic === 'inventory_levels/update') {
+    const deliveryId = request.headers.get('X-Shopify-Webhook-Id');
+    if (!deliveryId) return json({ error: 'Missing delivery ID' }, 400);
+    const saved = await db.prepare(`INSERT OR IGNORE INTO webhook_deliveries
+      (delivery_id, shop, topic) VALUES (?, ?, ?)`).bind(deliveryId, shop, topic).run();
+    if (saved.meta.changes === 0) return json({ ok: true, duplicate: true });
+    const itemId = `gid://shopify/InventoryItem/${payload.inventory_item_id}`;
+    const locationId = `gid://shopify/Location/${payload.location_id}`;
+    const link = await db.prepare(`SELECT l.id, l.group_id, l.sku, l.status,
+      g.status AS group_status FROM inventory_members m
+      JOIN inventory_links l ON l.id = m.link_id
+      JOIN sync_groups g ON g.id = l.group_id
+      WHERE m.shop = ? AND m.inventory_item_id = ? AND m.location_id = ?`)
+      .bind(shop, itemId, locationId).first();
+    if (link) {
+      await db.prepare(`INSERT INTO sync_events
+        (group_id, shop, link_id, event_type, detail) VALUES (?, ?, ?, 'inventory_webhook', ?)`)
+        .bind(link.group_id, shop, link.id, `Stock change received for ${link.sku}`).run();
+      if (link.status === 'active') {
+        await db.prepare('INSERT OR IGNORE INTO sync_jobs (link_id, dirty) VALUES (?, 1)')
+          .bind(link.id).run();
+        await db.prepare('UPDATE sync_jobs SET dirty = 1 WHERE link_id = ?').bind(link.id).run();
+        if (link.group_status === 'active') await env.SYNC_QUEUE.send({ linkId: link.id });
+      }
+    }
+    return json({ ok: true });
+  }
+  return json({ error: 'Unsupported webhook' }, 404);
+}
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (url.pathname === '/health') return json({ status: 'ok',
+      inventoryWritesEnabled: env.INVENTORY_WRITES_ENABLED === 'true' });
+    if (url.pathname === '/' && request.method === 'GET') {
+      if (!env.SHOPIFY_CLIENT_ID) return new Response('Set SHOPIFY_CLIENT_ID', { status: 503 });
+      return new Response(appPage(env.SHOPIFY_CLIENT_ID), { headers: {
+        'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
+        'Content-Security-Policy': "frame-ancestors https://admin.shopify.com https://*.myshopify.com; object-src 'none'; base-uri 'none'",
+        'X-Content-Type-Options': 'nosniff'
+      } });
+    }
+    if (url.pathname.startsWith('/api/')) return merchantApi(request, env, url.pathname);
+    if (request.method === 'POST' && url.pathname.startsWith('/webhooks/')) {
+      try { return await webhook(request, env, url.pathname); }
+      catch (error) { console.error('Webhook error', error); return json({ error: 'Webhook failed' }, 500); }
+    }
+    return json({ error: 'Not found' }, 404);
+  },
+  async queue(batch, env) {
+    for (const message of batch.messages) {
+      const linkId = message.body?.linkId;
+      if (typeof linkId !== 'string') { message.ack(); continue; }
+      try {
+        const result = await processLink(env, linkId);
+        if (result.retry) message.retry({ delaySeconds: result.delaySeconds ?? 30 });
+        else message.ack();
+      } catch (error) {
+        console.error('Queue failure', error);
+        message.retry({ delaySeconds: 30 });
+      }
+    }
+  },
+  async scheduled(event, env) {
+    const db = env.DB;
+    if (event.cron === '7 3 * * *') {
+      await db.prepare(`INSERT OR IGNORE INTO sync_jobs (link_id, dirty)
+        SELECT l.id, 1 FROM inventory_links l JOIN sync_groups g ON g.id = l.group_id
+        WHERE l.status = 'active' AND g.status = 'active'`).run();
+      await db.prepare(`UPDATE sync_jobs SET dirty = 1 WHERE link_id IN
+        (SELECT l.id FROM inventory_links l JOIN sync_groups g ON g.id = l.group_id
+        WHERE l.status = 'active' AND g.status = 'active')`).run();
+      const links = (await db.prepare(`SELECT l.id FROM inventory_links l
+        JOIN sync_groups g ON g.id = l.group_id
+        WHERE l.status = 'active' AND g.status = 'active' LIMIT 10000`).all()).results;
+      await enqueueLinks(env, links.map(x => x.id));
+    } else {
+      const jobs = (await db.prepare(`SELECT j.link_id FROM sync_jobs j
+        JOIN inventory_links l ON l.id = j.link_id
+        JOIN sync_groups g ON g.id = l.group_id
+        WHERE g.status = 'active' AND l.status = 'active' AND j.dirty = 1
+        AND (j.lock_owner IS NULL OR j.lock_until <= ?) LIMIT 100`)
+        .bind(Math.floor(Date.now() / 1000)).all()).results;
+      await enqueueLinks(env, jobs.map(x => x.link_id));
+      await db.prepare("DELETE FROM webhook_deliveries WHERE received_at < datetime('now', '-7 days')").run();
+      await db.prepare("DELETE FROM pairing_codes WHERE expires_at < ? OR used_at < datetime('now', '-1 day')")
+        .bind(Math.floor(Date.now() / 1000)).run();
+      await db.prepare("DELETE FROM sync_events WHERE created_at < datetime('now', '-90 days')").run();
+    }
+  }
+};

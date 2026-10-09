@@ -1,0 +1,24 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "online-sync",
+  "main": "src/worker.mjs",
+  "compatibility_date": "2026-10-09",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "online-sync",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "queues": {
+    "producers": [{ "binding": "SYNC_QUEUE", "queue": "online-sync-jobs" }],
+    "consumers": [{ "queue": "online-sync-jobs", "max_batch_size": 10,
+      "max_batch_timeout": 5, "max_retries": 5 }]
+  },
+  "triggers": { "crons": ["*/5 * * * *", "7 3 * * *"] },
+  "vars": {
+    "SHOPIFY_API_VERSION": "2026-07",
+    "INVENTORY_WRITES_ENABLED": "false"
+  }
+}
