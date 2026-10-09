@@ -15,6 +15,8 @@ OnlineSync hosting:
 
 The URL suffix is the Cloudflare account's shared Workers subdomain. OnlineSync is a separate Worker; it does not bind to the original syncApp's state or resources. All five database migrations have been applied only to the new OnlineSync database.
 
+Shopify account setup note: an unused development app named OnlineSync was created under the Firgelli merchant organization (`105534`, app `433756733441`). That organization does not expose public distribution. The app has no installations and its credentials have not been connected to Cloudflare. Do not use it for the public launch: the public app must be created under a Shopify Partner organization. No existing Shopify app was changed.
+
 Implemented:
 
 - Embedded Shopify App Home using App Bridge ID tokens, verified on every API request.
