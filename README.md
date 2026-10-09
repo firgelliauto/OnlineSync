@@ -4,7 +4,16 @@ OnlineSync is a hosted, multi-merchant Shopify app for keeping inventory aligned
 
 ## Current state
 
-The application code is ready for a **development-store pilot**, but it has not been connected to a new Shopify public app, a Cloudflare account, or live stores. `INVENTORY_WRITES_ENABLED` defaults to `false`; no Shopify inventory write can occur with the checked-in configuration. The old `M:/syncApp` deployment is separate and has not been changed.
+The application is deployed to its own Cloudflare resources and is awaiting a new Shopify public app and development-store pilot. `INVENTORY_WRITES_ENABLED` is `false`; no Shopify inventory write can occur with the checked-in configuration. The old `M:/syncApp` deployment is separate and has not been changed.
+
+OnlineSync hosting:
+
+- Worker: `online-sync`, at `https://online-sync.firgelli-inventory-sync.workers.dev`
+- D1 database: `online-sync` (`7845cdcd-7d1e-43e0-85da-88892820817b`)
+- Queue: `online-sync-jobs`
+- Token encryption key: stored as an OnlineSync Worker secret, with a local backup in ignored `.dev.vars`.
+
+The URL suffix is the Cloudflare account's shared Workers subdomain. OnlineSync is a separate Worker; it does not bind to the original syncApp's state or resources. All five database migrations have been applied only to the new OnlineSync database.
 
 Implemented:
 
@@ -57,13 +66,13 @@ npx wrangler deploy --dry-run
 
 Create a **new public Shopify app** in the Dev Dashboard. Do not reuse the client ID or credentials from `M:/syncApp`, which uses a different grant for two stores in one organization. Copy `shopify.app.example.toml` to `shopify.app.toml` and fill in that new app's client ID and the Cloudflare Worker URL. The exact TOML must be reviewed against the new app's Dev Dashboard before it is pushed to Shopify.
 
-Create a Cloudflare D1 database called `online-sync` and a Queue called `online-sync-jobs`. Replace the placeholder `database_id` in `wrangler.jsonc` with the real D1 ID. Apply migrations remotely only after confirming the target account and database. The app's Cloudflare secrets are listed in `.env.example`; put local values in ignored `.dev.vars` and hosted values in Cloudflare Worker secrets. Generate a fresh 32-byte base64 `TOKEN_ENCRYPTION_KEY`. Never commit credentials or paste them into a public issue.
+The Cloudflare D1 database and Queue are already created and bound in `wrangler.jsonc`. Apply future migrations remotely only after confirming the target account and OnlineSync database. The app's Cloudflare secrets are listed in `.env.example`; put local values in ignored `.dev.vars` and hosted values in the `online-sync` Worker secrets. Its 32-byte token encryption key has already been generated. Preserve that key when adding Shopify credentials. Never commit credentials or paste them into a public issue.
 
 Configure a monthly plan in Shopify App Pricing and provide the Partner organization ID, Partner API access token, public app GID, and app handle as Worker secrets. The billing check fails closed: without these values, starting sync is unavailable. Keep `INVENTORY_WRITES_ENABLED=false` while testing installs, pairing, locations, preview, webhook signatures, billing, and subscription redirects. For a development-store pilot, turn it on only in the new OnlineSync Worker after reviewing the specific test stores and initial stock preview. This switch has no effect on the existing syncApp Worker.
 
 ## Verification and remaining work
 
-`npm test` covers Shopify token and webhook verification, token encryption, one-use pairing, main and child sales, initial copy, webhook echoes, and simultaneous-change blocking. `wrangler d1 migrations apply --local` and `wrangler deploy --dry-run` validate the database and Worker bundle. No real Shopify or Cloudflare integration has been tested because the new public app and hosted resources are not connected yet.
+`npm test` covers Shopify token and webhook verification, token encryption, one-use pairing, main and child sales, initial copy, webhook echoes, and simultaneous-change blocking. Database migrations and the Worker deployment have succeeded. The hosted health endpoint has been checked with inventory writes disabled. Shopify installation, billing, and inventory integration still require the new public app and development stores.
 
 The next pilot should test install/uninstall/reinstall, subscription changes, token refresh, HMAC delivery, catalog sizes and rate limits, initial-copy interruption, simultaneous orders, inventory write retries, pause/resume, and privacy webhooks on development stores. Product descriptions, images, prices, and SEO fields should receive field-level sync rules and previews before being added to the live write path.
 
