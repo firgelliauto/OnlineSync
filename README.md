@@ -23,6 +23,15 @@ The new public app's client ID and client secret are stored in ignored `.dev.var
 
 The Partner organization still needs Shopify App Store registration before app submission. Shopify's registration form asks for business type, associated developer accounts, and an attestation under the Partner Program Agreement; the account owner must complete that step. It is not required just to prepare the development-store pilot.
 
+Two new Basic development stores were created solely for the OnlineSync pilot, with Shopify test-data generation selected:
+
+- Main: `onlinesync-pilot-main.myshopify.com` (shop ID `100582523190`).
+- Second: `onlinesync-pilot-second.myshopify.com` (shop ID `84546683135`).
+
+These are separate from the existing FirgelliTest store and from all production stores. OnlineSync is installed through Shopify CLI development previews on both stores (`app dev --no-update` retained the hosted Worker URL). The previews remain after stopping CLI; use `app dev clean` to restore the released app configuration. Both stores are authenticated and paired, with Main as the main store and `Shop location` selected on each. The app's Shopify admin handle is `onlinesync-3`.
+
+The sample Minimal Snowboard was assigned `ONLINESYNC-PILOT-001` on both stores. The first successful read-only preview found that SKU and Shopify's sample `sku-managed-1`, each showing main 50 and other 50. No inventory changed. Live installation/token exchange, location discovery, pairing, and catalog GraphQL reads are now verified. Billing setup and actual inventory propagation, including sales and retries, remain pending. The Worker write switch remains off.
+
 Implemented:
 
 - Embedded Shopify App Home using App Bridge ID tokens, verified on every API request.
