@@ -17,6 +17,12 @@ The URL suffix is the Cloudflare account's shared Workers subdomain. OnlineSync 
 
 Shopify account setup note: an unused development app named OnlineSync was created under the Firgelli merchant organization (`105534`, app `433756733441`). That organization does not expose public distribution. The app has no installations and its credentials have not been connected to Cloudflare. Do not use it for the public launch: the public app must be created under a Shopify Partner organization. No existing Shopify app was changed.
 
+The actual public OnlineSync app is now created in the **Firgelli Test** Partner organization (Partner ID `1882822`, Dev Dashboard organization `129088346`). Its app ID is `433757585409`, client ID is `9f8d8ce3e71355bdf6f7137cdfe5738d`, and its app GID is `gid://shopify/App/433757585409`. Public distribution has been selected. The initial `development-pilot` version points to the OnlineSync Worker with only `read_products,read_inventory,write_inventory,read_locations` scopes. This does not mean the app has been submitted to or approved by the App Store. No stores have installed it yet.
+
+The new public app's client ID and client secret are stored in ignored `.dev.vars` and in the `online-sync` Worker secrets. The existing encryption key was preserved. Shopify CLI is installed locally and authenticated. `shopify.app.toml` was imported from this app, then deployed as active version `pilot-webhooks-v1` (`1161770074113`) with inventory, uninstall, and mandatory privacy webhook subscriptions. No product-write scope is requested.
+
+The Partner organization still needs Shopify App Store registration before app submission. Shopify's registration form asks for business type, associated developer accounts, and an attestation under the Partner Program Agreement; the account owner must complete that step. It is not required just to prepare the development-store pilot.
+
 Implemented:
 
 - Embedded Shopify App Home using App Bridge ID tokens, verified on every API request.
@@ -66,7 +72,7 @@ npm run db:local
 npx wrangler deploy --dry-run
 ```
 
-Create a **new public Shopify app** in the Dev Dashboard. Do not reuse the client ID or credentials from `M:/syncApp`, which uses a different grant for two stores in one organization. Copy `shopify.app.example.toml` to `shopify.app.toml` and fill in that new app's client ID and the Cloudflare Worker URL. The exact TOML must be reviewed against the new app's Dev Dashboard before it is pushed to Shopify.
+The **new public Shopify app** is linked in `shopify.app.toml`. Do not reuse the client ID or credentials from `M:/syncApp`, which uses a different grant for two stores in one organization. Review configuration changes against OnlineSync's Dev Dashboard before pushing them with `npm run shopify -- app deploy`. Deploying app configuration does not deploy the Worker; use `npm run deploy` for that.
 
 The Cloudflare D1 database and Queue are already created and bound in `wrangler.jsonc`. Apply future migrations remotely only after confirming the target account and OnlineSync database. The app's Cloudflare secrets are listed in `.env.example`; put local values in ignored `.dev.vars` and hosted values in the `online-sync` Worker secrets. Its 32-byte token encryption key has already been generated. Preserve that key when adding Shopify credentials. Never commit credentials or paste them into a public issue.
 

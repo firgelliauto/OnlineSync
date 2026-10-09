@@ -6,7 +6,7 @@ application_url = "https://REPLACE_WITH_WORKER_HOST/"
 embedded = true
 
 [access_scopes]
-scopes = "read_products,write_products,read_inventory,write_inventory,read_locations"
+scopes = "read_products,read_inventory,write_inventory,read_locations"
 use_legacy_install_flow = false
 
 [webhooks]
