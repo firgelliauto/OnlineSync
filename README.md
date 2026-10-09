@@ -25,6 +25,8 @@ The account owner completed Shopify App Store registration on October 9, 2026, a
 
 The English plan display name is still pending. Shopify validates the entire listing before saving localized plan descriptions, so a partial save was rejected due to missing app icon, category, media/screenshots, public support email, privacy URL, and other listing content. The listing editor currently contains an unsaved `Basic` display name. Do not treat the paid plan as merchant-ready yet. Partner API credentials and development-store subscription tests also remain pending; no merchant charges have been approved.
 
+OnlineSync's approved business name is **Firgelliauto** and its public support email is **nathan@firgelliauto.com**. These details are recorded in `docs/listing-details.json` for app-specific listing and support/privacy content. The support email is entered in Shopify's listing editor but remains unsaved until the rest of the listing passes validation. The shared Partner organization settings have not been renamed.
+
 Two new Basic development stores were created solely for the OnlineSync pilot, with Shopify test-data generation selected:
 
 - Main: `onlinesync-pilot-main.myshopify.com` (shop ID `100582523190`).

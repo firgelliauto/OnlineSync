@@ -1,0 +1,13 @@
+{
+  "appName": "OnlineSync",
+  "businessName": "Firgelliauto",
+  "supportEmail": "nathan@firgelliauto.com",
+  "primaryLanguage": "en",
+  "plan": {
+    "name": "Basic",
+    "handle": "basic",
+    "currency": "USD",
+    "monthlyPrice": 20,
+    "trialDays": 7
+  }
+}
