@@ -4,7 +4,7 @@ OnlineSync is a hosted, multi-merchant Shopify app for keeping inventory aligned
 
 ## Current state
 
-The application is deployed to its own Cloudflare resources and is awaiting a new Shopify public app and development-store pilot. `INVENTORY_WRITES_ENABLED` is `false`; no Shopify inventory write can occur with the checked-in configuration. The old `M:/syncApp` deployment is separate and has not been changed.
+The application is deployed to its own Cloudflare resources and linked to a new Shopify public app. Installation, authentication, pairing, locations, and a read-only catalog preview work on two isolated development stores. Billing and inventory propagation testing are still pending. `INVENTORY_WRITES_ENABLED` is `false`; no Shopify inventory write can occur with the checked-in configuration. The old `M:/syncApp` deployment is separate and has not been changed.
 
 OnlineSync hosting:
 
@@ -17,11 +17,11 @@ The URL suffix is the Cloudflare account's shared Workers subdomain. OnlineSync 
 
 Shopify account setup note: an unused development app named OnlineSync was created under the Firgelli merchant organization (`105534`, app `433756733441`). That organization does not expose public distribution. The app has no installations and its credentials have not been connected to Cloudflare. Do not use it for the public launch: the public app must be created under a Shopify Partner organization. No existing Shopify app was changed.
 
-The actual public OnlineSync app is now created in the **Firgelli Test** Partner organization (Partner ID `1882822`, Dev Dashboard organization `129088346`). Its app ID is `433757585409`, client ID is `9f8d8ce3e71355bdf6f7137cdfe5738d`, and its app GID is `gid://shopify/App/433757585409`. Public distribution has been selected. The initial `development-pilot` version points to the OnlineSync Worker with only `read_products,read_inventory,write_inventory,read_locations` scopes. This does not mean the app has been submitted to or approved by the App Store. No stores have installed it yet.
+The actual public OnlineSync app is now created in the **Firgelli Test** Partner organization (Partner ID `1882822`, Dev Dashboard organization `129088346`). Its app ID is `433757585409`, client ID is `9f8d8ce3e71355bdf6f7137cdfe5738d`, and its app GID is `gid://shopify/App/433757585409`. Public distribution has been selected. The app points to the OnlineSync Worker with only `read_products,read_inventory,write_inventory,read_locations` scopes. Two development stores have installed it. It has not been submitted to or approved by the App Store.
 
 The new public app's client ID and client secret are stored in ignored `.dev.vars` and in the `online-sync` Worker secrets. The existing encryption key was preserved. Shopify CLI is installed locally and authenticated. `shopify.app.toml` was imported from this app, then deployed as active version `pilot-webhooks-v1` (`1161770074113`) with inventory, uninstall, and mandatory privacy webhook subscriptions. No product-write scope is requested.
 
-The Partner organization still needs Shopify App Store registration before app submission. Shopify's registration form asks for business type, associated developer accounts, and an attestation under the Partner Program Agreement; the account owner must complete that step. It is not required just to prepare the development-store pilot.
+The account owner completed Shopify App Store registration on October 9, 2026, and the Partner Dashboard confirms registration succeeded. The draft listing's primary language is English. The inventory app declares no customer-data use; it requests no customer or order scopes. The agreed first subscription plan is **Basic: USD 20 monthly with a 7-day free trial**. Shopify pricing configuration is pending; prices and trial length belong in Shopify App Pricing rather than being hardcoded in the Worker.
 
 Two new Basic development stores were created solely for the OnlineSync pilot, with Shopify test-data generation selected:
 
