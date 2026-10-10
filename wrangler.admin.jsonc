@@ -10,6 +10,11 @@
   "d1_databases": [{ "binding": "DB", "database_name": "online-sync", "database_id": "7845cdcd-7d1e-43e0-85da-88892820817b" }],
   "vars": {
     "ADMIN_EMAIL": "ndavey97@gmail.com",
+    "CLOUDFLARE_ACCOUNT_ID": "b74fac168ae67c00ce65cced1528bf50",
+    "CLOUDFLARE_DATABASE_ID": "7845cdcd-7d1e-43e0-85da-88892820817b",
+    "CLOUDFLARE_QUEUE_ID": "c697373ee49442948fbc049b1a0f4458",
+    "CLOUDFLARE_PLAN": "free",
+    "CLOUDFLARE_PLAN_VERIFIED_AT": "2026-10-09",
     "ACCESS_ISSUER": "https://withered-salad-0f48.cloudflareaccess.com",
     "ACCESS_AUD": "765212a4de4687b7571a5bb3de38ff2404d6611739c042665bbc0fc111ce7244",
     "PILOT_SHOPS": "onlinesync-pilot-main.myshopify.com,onlinesync-pilot-second.myshopify.com"
