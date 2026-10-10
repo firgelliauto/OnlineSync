@@ -65,6 +65,9 @@ async function setup(main = 10, child = 10, initialized = 1) {
   const quantities = { 'main.myshopify.com': main, 'child.myshopify.com': child };
   const writes = [];
   const eligibility = {};
+  const failures = {};
+  const completed = new Map();
+  const attempts = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
     const shop = new URL(url).hostname;
@@ -79,6 +82,9 @@ async function setup(main = 10, child = 10, initialized = 1) {
     if (query.includes('mutation SetQuantity')) {
       const entry = variables.input.quantities[0];
       assert.equal(typeof variables.key, 'string');
+      attempts.push({ key: variables.key, shop, ...entry });
+      if (completed.has(variables.key)) return Response.json(completed.get(variables.key));
+      if (failures.beforeWrite) { failures.beforeWrite--; throw new Error('Test network interruption'); }
       if (quantities[shop] !== entry.changeFromQuantity) {
         return Response.json({ data: { inventorySetQuantities: {
           userErrors: [{ code: 'CHANGE_FROM_QUANTITY_STALE', message: 'Stale' }],
@@ -86,8 +92,11 @@ async function setup(main = 10, child = 10, initialized = 1) {
       }
       quantities[shop] = entry.quantity;
       writes.push({ shop, from: entry.changeFromQuantity, to: entry.quantity });
-      return Response.json({ data: { inventorySetQuantities: {
-        userErrors: [], inventoryAdjustmentGroup: { createdAt: new Date().toISOString() } } } });
+      const result = { data: { inventorySetQuantities: {
+        userErrors: [], inventoryAdjustmentGroup: { createdAt: new Date().toISOString() } } } };
+      completed.set(variables.key, result);
+      if (failures.afterWrite) { failures.afterWrite--; throw new Error('Test response lost after stock update'); }
+      return Response.json(result);
     }
     throw new Error(`Unexpected Shopify request: ${query}`);
   };
@@ -96,7 +105,7 @@ async function setup(main = 10, child = 10, initialized = 1) {
     SHOPIFY_API_VERSION: '2026-07', SHOPIFY_PARTNER_ORG_ID: 'org',
     SHOPIFY_PARTNER_API_ACCESS_TOKEN: 'partner-token', SHOPIFY_APP_GID: 'app',
     SHOPIFY_APP_HANDLE: 'online-sync' };
-  return { sqlite, db, env, quantities, writes, eligibility,
+  return { sqlite, db, env, quantities, writes, eligibility, failures, attempts,
     close() { globalThis.fetch = originalFetch; sqlite.close(); } };
 }
 
@@ -205,6 +214,60 @@ test('simultaneous changes block the SKU without a Shopify write', async () => {
     assert.deepEqual(await processLink(state.env, 'link'), { retry: false });
     assert.equal(state.sqlite.prepare("SELECT status FROM inventory_links WHERE id='link'")
       .get().status, 'blocked');
+    assert.equal(state.writes.length, 0);
+  } finally { state.close(); }
+});
+
+test('a failed initial write survives interruption and retries its original plan', async () => {
+  const state = await setup(10, 8, 0);
+  try {
+    state.failures.beforeWrite = 1;
+    assert.equal((await processLink(state.env, 'link')).retry, true);
+    const pending = state.sqlite.prepare('SELECT * FROM sync_writes').get();
+    assert.equal(pending.from_quantity, 8);
+    assert.equal(pending.to_quantity, 10);
+    assert.equal(state.quantities['child.myshopify.com'], 8);
+    assert.equal(state.sqlite.prepare('SELECT dirty,lock_owner FROM sync_jobs').get().lock_owner, null);
+    assert.equal(state.sqlite.prepare('SELECT dirty FROM sync_jobs').get().dirty, 1);
+    assert.equal((await processLink(state.env, 'link')).retry, true);
+    assert.equal(state.quantities['child.myshopify.com'], 10);
+    assert.equal(state.attempts[1].key, pending.id);
+    assert.equal(state.writes.length, 1);
+    assert.equal(state.sqlite.prepare('SELECT COUNT(*) AS count FROM sync_writes').get().count, 0);
+    assert.equal((await processLink(state.env, 'link')).retry, false);
+  } finally { state.close(); }
+});
+
+test('a lost response after Shopify commits reuses the key and preserves a later sale', async () => {
+  const state = await setup(10, 8, 0);
+  try {
+    state.failures.afterWrite = 1;
+    assert.equal((await processLink(state.env, 'link')).retry, true);
+    assert.equal(state.quantities['child.myshopify.com'], 10);
+    const pending = state.sqlite.prepare('SELECT * FROM sync_writes').get();
+    state.quantities['child.myshopify.com'] = 9; // A sale occurs while the response is lost.
+    assert.equal((await processLink(state.env, 'link')).retry, true);
+    assert.equal(state.attempts[1].key, pending.id);
+    assert.equal(state.quantities['child.myshopify.com'], 9);
+    assert.equal(state.writes.length, 1);
+    assert.equal(state.sqlite.prepare('SELECT dirty FROM sync_jobs').get().dirty, 1);
+    await processLink(state.env, 'link');
+    assert.equal(state.quantities['main.myshopify.com'], 9);
+    assert.equal(state.quantities['child.myshopify.com'], 9);
+    await processLink(state.env, 'link'); // Echo reconciliation does not count the sale again.
+    assert.equal(state.writes.length, 2);
+  } finally { state.close(); }
+});
+
+test('stock changing before a failed write retries blocks instead of overwriting the sale', async () => {
+  const state = await setup(10, 8, 0);
+  try {
+    state.failures.beforeWrite = 1;
+    await processLink(state.env, 'link');
+    state.quantities['child.myshopify.com'] = 7;
+    assert.equal((await processLink(state.env, 'link')).retry, false);
+    assert.equal(state.sqlite.prepare('SELECT status FROM inventory_links').get().status, 'blocked');
+    assert.equal(state.quantities['child.myshopify.com'], 7);
     assert.equal(state.writes.length, 0);
   } finally { state.close(); }
 });

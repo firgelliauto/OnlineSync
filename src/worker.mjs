@@ -8,6 +8,7 @@ import { activeSubscription } from './billing.mjs';
 import { enqueueLinks, processLink } from './inventory.mjs';
 import { shopsAllowedToWrite } from './write-policy.mjs';
 import { prepareConflictPreview } from './conflicts.mjs';
+import { inventoryPage } from './inventory-view.mjs';
 
 const json = (data, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
 const invalidSession = () => new Response(JSON.stringify({ error: 'Invalid Shopify session' }), {
@@ -69,6 +70,8 @@ async function status(db, shop, env) {
       status: group.status, billing },
     stores: members.results, links: Number(counts.links), blocked: Number(counts.blocked ?? 0),
     canPair: group.role === 'main' && group.status !== 'active' && Number(counts.established ?? 0) === 0,
+    canPreview: group.role === 'main' && group.status !== 'active' && Number(counts.established ?? 0) === 0 &&
+      members.results.length >= 2 && members.results.every(member => member.location_id && !member.uninstalled_at),
     recent: recent.results, blockedLinks: blockedLinks.results, pendingPreview: pendingPreview.results,
     inventory: inventory.results,
     inventoryWritesEnabled: shopsAllowedToWrite(env, members.results.map(member => member.shop)) };
@@ -96,8 +99,9 @@ async function preview(db, group, env) {
     .bind(group.id).run();
   await db.prepare('DELETE FROM inventory_links WHERE group_id = ? AND status = ?')
     .bind(group.id, 'preview').run();
-  for (let offset = 0; offset < matches.length; offset += 100) {
-    const chunk = matches.slice(offset, offset + 100).map(match => ({ ...match, id: crypto.randomUUID() }));
+  // D1 permits at most 100 bound parameters in one statement.
+  for (let offset = 0; offset < matches.length; offset += 25) {
+    const chunk = matches.slice(offset, offset + 25).map(match => ({ ...match, id: crypto.randomUUID() }));
     const linkValues = chunk.flatMap(row => [row.id, group.id, row.sku, row.source.quantity]);
     const linkSql = `INSERT INTO inventory_links
       (id, group_id, sku, shared_quantity, status) VALUES ${
@@ -108,8 +112,8 @@ async function preview(db, group, env) {
         child.location_id, row.children[i].quantity])
     ]);
     const statements = [db.prepare(linkSql).bind(...linkValues)];
-    for (let i = 0; i < memberRows.length; i += 100) {
-      const batch = memberRows.slice(i, i + 100);
+    for (let i = 0; i < memberRows.length; i += 20) {
+      const batch = memberRows.slice(i, i + 20);
       const memberSql = `INSERT INTO inventory_members
         (link_id, shop, inventory_item_id, location_id, last_quantity) VALUES ${
           batch.map(() => '(?, ?, ?, ?, ?)').join(', ')}`;
@@ -186,6 +190,9 @@ async function merchantApi(request, env, path) {
     const group = await currentGroup(db, user.shop);
     if (!group) return json({ error: 'Store is not in a sync group' }, 409);
     if (path === '/api/status' && request.method === 'GET') return json(await status(db, user.shop, env));
+    if (path === '/api/inventory' && request.method === 'GET') {
+      return json(await inventoryPage(db, group.id, new URL(request.url).searchParams));
+    }
     if (path === '/api/locations' && request.method === 'GET') {
       return json({ locations: await listLocations(db, user.shop, env) });
     }

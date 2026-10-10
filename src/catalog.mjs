@@ -3,6 +3,7 @@ import { adminGraphql } from './shopify.mjs';
 export async function listEligibleVariants(db, shop, locationId, env) {
   if (!/^gid:\/\/shopify\/Location\/\d+$/.test(locationId ?? '')) throw new Error('Choose a valid location');
   const bySku = new Map();
+  const seenSkus = new Set();
   let after = null;
   do {
     const data = await adminGraphql(db, shop, env, `query Variants($after: String, $location: ID!) {
@@ -14,12 +15,15 @@ export async function listEligibleVariants(db, shop, locationId, env) {
     }`, { after, location: locationId });
     for (const variant of data.productVariants.nodes) {
       const sku = variant.sku?.trim();
-      if (!sku || !variant.inventoryItem?.tracked || !variant.inventoryItem?.requiresShipping ||
+      if (!sku) continue;
+      // Count every variant, including ineligible ones and variants on later pages.
+      if (seenSkus.has(sku)) { bySku.set(sku, null); continue; }
+      seenSkus.add(sku);
+      if (!variant.inventoryItem?.tracked || !variant.inventoryItem?.requiresShipping ||
           variant.inventoryPolicy !== 'DENY') continue;
       const quantity = variant.inventoryItem.inventoryLevel?.quantities?.find(x => x.name === 'available')?.quantity;
       if (!Number.isInteger(quantity) || quantity < 0) continue;
-      if (bySku.has(sku)) bySku.set(sku, null);
-      else bySku.set(sku, { sku, itemId: variant.inventoryItem.id, quantity });
+      bySku.set(sku, { sku, itemId: variant.inventoryItem.id, quantity });
     }
     if (!data.productVariants.pageInfo.hasNextPage) break;
     after = data.productVariants.pageInfo.endCursor;

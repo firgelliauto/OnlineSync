@@ -171,8 +171,16 @@ export async function processLink(env, linkId) {
     }
     const pending = await db.prepare('SELECT 1 AS found FROM sync_writes WHERE link_id = ? LIMIT 1')
       .bind(linkId).first();
-    if (pending) await processWrites(db, link, members, env);
-    else await reconcile(db, link, members, env);
+    if (pending) {
+      await processWrites(db, link, members, env);
+      const latest = await db.prepare('SELECT status FROM inventory_links WHERE id = ?').bind(linkId).first();
+      if (latest?.status === 'active') {
+        // A sale can occur while an interrupted write is being retried. Re-read
+        // all stores next, even if its webhook arrived before this claim.
+        await db.prepare('UPDATE sync_jobs SET dirty = 1 WHERE link_id = ?').bind(linkId).run();
+        return { retry: true, delaySeconds: 1 };
+      }
+    } else await reconcile(db, link, members, env);
     return { retry: false };
   } catch (error) {
     console.error('Sync failed for link', linkId, error);
