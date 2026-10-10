@@ -18,6 +18,8 @@
 
 ## Required before submission
 
+- Validate a live three/four-store group and larger multi-variant product galleries, product catalog scans and throttling. Update listing screenshots and the review recording to include optional product fields.
+
 - Record actual onboarding, subscription and inventory behavior; upload the 3–8 minute screencast to an accessible supported destination. Script: `listing/review-video.md`. The listing currently reports this as its sole missing field.
 - Exercise a larger real catalog and Shopify throttling; the automated catalog fixture is not a load-test result.
 - Verify subscription cancellation/plan changes pause stock work and a renewed subscription permits a deliberate resume.
@@ -30,4 +32,4 @@
 
 Use only `wrangler.jsonc` in this repo: Worker `online-sync`, database ID `7845cdcd-7d1e-43e0-85da-88892820817b`, Queue `online-sync-jobs`. Preserve its encryption key. Inventory writes are enabled only for `onlinesync-pilot-main.myshopify.com` and `onlinesync-pilot-second.myshopify.com`. Public activation requires a deliberate change to the write allowlist after launch checks.
 
-The inventory release does not synchronize product descriptions, photos, prices or SEO. Those need field-level previews and product-write permissions before implementation and release.
+Optional product syncing now supports eleven independently selected fields, guarded previews and automatic main-store webhook copies. Product writes share the exact two-store pilot allowlist and require PRODUCT_WRITES_ENABLED. Product permission grants, price-only isolation, all eleven fields including images/options, real webhook/queue propagation and unchanged inventory were verified on both pilot stores; products were restored and automatic product copying left off.

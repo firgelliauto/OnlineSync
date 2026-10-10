@@ -7,6 +7,7 @@ embedded = true
 
 [access_scopes]
 scopes = "read_products,read_inventory,write_inventory,read_locations"
+optional_scopes = ["write_products", "read_files"]
 use_legacy_install_flow = false
 
 [webhooks]
@@ -15,6 +16,10 @@ api_version = "2026-07"
 [[webhooks.subscriptions]]
 topics = ["inventory_levels/update"]
 uri = "/webhooks/inventory"
+
+[[webhooks.subscriptions]]
+topics = ["products/update", "products/create"]
+uri = "/webhooks/products"
 
 [[webhooks.subscriptions]]
 topics = ["app/uninstalled"]

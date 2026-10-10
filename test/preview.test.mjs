@@ -6,7 +6,7 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { encrypt } from '../src/security.mjs';
 import worker from '../src/worker.mjs';
 
-for (const storeCount of [2,4]) test(`a ${storeCount}-store paginated 260-variant preview respects D1 limits and excludes all duplicate SKUs`, async () => {
+for (const storeCount of [2,3,4]) test(`a ${storeCount}-store paginated 260-variant preview respects D1 limits and excludes all duplicate SKUs`, async () => {
   const sqlite = new DatabaseSync(':memory:');
   const originalFetch = globalThis.fetch;
   const boundCounts = [];

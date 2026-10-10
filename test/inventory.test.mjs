@@ -108,21 +108,21 @@ async function setup(main = 10, child = 10, initialized = 1, extraStores = []) {
     close() { globalThis.fetch = originalFetch; sqlite.close(); } };
 }
 
-test('four-store initial copy and sales from every store update all three peers without echoing', async () => {
-  const state = await setup(10,8,0,['third.myshopify.com','fourth.myshopify.com']);
+for (const storeCount of [2,3,4]) test(storeCount+'-store initial copy and sales from every store update their peers without echoing', async () => {
+  const state = await setup(10,8,0,['third.myshopify.com','fourth.myshopify.com'].slice(0,storeCount-2));
   try {
     await processLink(state.env,'link');
-    assert.equal(state.writes.length,3);
-    assert.deepEqual(Object.values(state.quantities),[10,10,10,10]);
+    assert.equal(state.writes.length,storeCount-1);
+    assert.ok(Object.values(state.quantities).every(quantity=>quantity===10));
     let target=10;
     for (const origin of Object.keys(state.quantities)) {
       state.writes.length=0; state.quantities[origin]=--target;
       await processLink(state.env,'link');
-      assert.equal(state.writes.length,3);
+      assert.equal(state.writes.length,storeCount-1);
       assert.ok(state.writes.every(write=>write.shop!==origin&&write.to===target));
       assert.ok(Object.values(state.quantities).every(quantity=>quantity===target));
       await processLink(state.env,'link');
-      assert.equal(state.writes.length,3,'Copy acknowledgements must not reduce stock again');
+      assert.equal(state.writes.length,storeCount-1,'Copy acknowledgements must not reduce stock again');
     }
   } finally { state.close(); }
 });

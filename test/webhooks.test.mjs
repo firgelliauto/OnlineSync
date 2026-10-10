@@ -88,3 +88,19 @@ test('invalid webhook signatures cannot uninstall or redact a store', async () =
     assert.equal(sqlite.prepare("SELECT status FROM sync_groups WHERE id='group'").get().status, 'active');
   } finally { sqlite.close(); }
 });
+test('product webhooks ignore child changes, deduplicate main delivery and recover a failed queue send',async()=>{
+ const {sqlite,env}=fixture();const sent=[];let failSend=true;
+ env.SYNC_QUEUE={send:async body=>{if(failSend)throw Error('Queue unavailable');sent.push(body)}};
+ sqlite.exec(`INSERT INTO product_sync_settings(group_id,fields,enabled) VALUES ('group','["title"]',1)`);
+ const notification=(shop,id)=>{const body=JSON.stringify({id:123});return new Request('https://example.test/webhooks/products',{method:'POST',body,headers:{'X-Shopify-Topic':'products/update','X-Shopify-Shop-Domain':shop,'X-Shopify-Webhook-Id':id,'X-Shopify-Hmac-Sha256':createHmac('sha256','test-secret').update(body).digest('base64')}})};
+ try{
+  assert.equal((await worker.fetch(notification('child.myshopify.com','child-change'),env)).status,200);assert.equal(sent.length,0);
+  assert.equal((await worker.fetch(notification('main.myshopify.com','main-change'),env)).status,500);
+  assert.equal(sqlite.prepare("SELECT * FROM webhook_deliveries WHERE delivery_id='main-change'").get(),undefined);
+  assert.equal(sqlite.prepare('SELECT dirty FROM product_sync_jobs').get().dirty,1);
+  failSend=false;assert.equal((await worker.fetch(notification('main.myshopify.com','main-change'),env)).status,200);
+  assert.equal((await worker.fetch(notification('main.myshopify.com','main-change'),env)).status,200);assert.equal(sent.length,1);
+  await worker.fetch(request('/webhooks/uninstalled','app/uninstalled','child.myshopify.com'),env);
+  assert.equal(sqlite.prepare('SELECT enabled FROM product_sync_settings').get().enabled,0);
+ }finally{sqlite.close()}
+});

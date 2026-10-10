@@ -11,6 +11,7 @@ import { shopsAllowedToWrite } from './write-policy.mjs';
 import { prepareConflictPreview } from './conflicts.mjs';
 import { inventoryPage } from './inventory-view.mjs';
 import { heartbeat, recordIssue, resolveIssue } from './operations.mjs';
+import { productSettings, saveProductSettings, previewProduct, applyProductPreview, queueProduct, processProductJob, queueProductCatalog } from './product-sync.mjs';
 
 const json = (data, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
 const invalidSession = () => new Response(JSON.stringify({ error: 'Invalid Shopify session' }), {
@@ -199,6 +200,26 @@ async function merchantApi(request, env, path) {
     const group = await currentGroup(db, user.shop);
     if (!group) return json({ error: 'Store is not in a sync group' }, 409);
     if (path === '/api/status' && request.method === 'GET') return json(await status(db, user.shop, env));
+    if (path === '/api/product-settings' && request.method === 'GET') return json(await productSettings(db,group.id));
+    if (path === '/api/product-access' && request.method === 'POST') {
+      await saveToken(db,user.shop,await exchangeOfflineToken(user.shop,idToken,env),env);
+      return json({ok:true});
+    }
+    if (path === '/api/product-settings' && request.method === 'POST') {
+      const input=await request.json();return json(await saveProductSettings(db,group,input.fields,input.enabled));
+    }
+    if (path === '/api/product-preview' && request.method === 'POST') {
+      const input=await request.json();return json(await previewProduct(db,group,input.sku,env));
+    }
+    if (path === '/api/product-apply' && request.method === 'POST') {
+      const input=await request.json();if(typeof input.previewId!=='string'||input.previewId.length>100)return json({error:'Choose a product preview'},400);
+      return json(await applyProductPreview(db,group,input.previewId,env));
+    }
+    if (path === '/api/product-catalog' && request.method === 'POST') {
+      if(group.role!=='main')return json({error:'Open the main store to sync products'},403);
+      const settings=await productSettings(db,group.id);if(!settings.enabled)return json({error:'Enable automatic product sync first'},409);
+      await queueProductCatalog(env,group.id);return json({ok:true});
+    }
     if (path === '/api/inventory' && request.method === 'GET') {
       return json(await inventoryPage(db, group.id, new URL(request.url).searchParams));
     }
@@ -279,10 +300,23 @@ async function webhook(request, env, path) {
   if (!validShop(shop)) return json({ error: 'Invalid shop' }, 400);
   const db = env.DB;
   const payload = JSON.parse(new TextDecoder().decode(raw));
+  if(path==='/webhooks/products'&&['products/update','products/create'].includes(topic)){
+    const deliveryId=request.headers.get('X-Shopify-Webhook-Id');if(!deliveryId)return json({error:'Missing delivery ID'},400);
+    const saved=await db.prepare('INSERT OR IGNORE INTO webhook_deliveries (delivery_id,shop,topic) VALUES (?,?,?)').bind(deliveryId,shop,topic).run();if(!saved.meta.changes)return json({ok:true});
+    try{
+      const group=await currentGroup(db,shop);
+      if(group?.role==='main'&&(await productSettings(db,group.id)).enabled){
+        if(!/^\d+$/.test(String(payload.id??'')))return json({error:'Invalid product ID'},400);
+        await queueProduct(env,group.id,'gid://shopify/Product/'+payload.id);
+      }
+    }catch(error){await db.prepare('DELETE FROM webhook_deliveries WHERE delivery_id=?').bind(deliveryId).run();throw error;}
+    return json({ok:true});
+  }
   if (path === '/webhooks/uninstalled' && topic === 'app/uninstalled') {
     const membership = await currentGroup(db, shop);
     if (membership) await db.prepare("UPDATE sync_groups SET status = 'paused' WHERE id = ?")
       .bind(membership.id).run();
+    if(membership)await db.prepare('UPDATE product_sync_settings SET enabled=0,revision=revision+1 WHERE group_id=?').bind(membership.id).run();
     await db.prepare(`UPDATE stores SET uninstalled_at = CURRENT_TIMESTAMP,
       access_token_cipher = '', refresh_token_cipher = '', token_expires_at = 0,
       refresh_expires_at = 0 WHERE shop = ?`).bind(shop).run();
@@ -295,6 +329,8 @@ async function webhook(request, env, path) {
         await db.prepare('DELETE FROM sync_events WHERE group_id = ?').bind(membership.id).run();
         await db.prepare('DELETE FROM sync_groups WHERE id = ?').bind(membership.id).run();
       } else if (membership) {
+        await db.prepare('UPDATE product_sync_settings SET enabled=0,revision=revision+1 WHERE group_id=?').bind(membership.id).run();
+        await db.prepare('DELETE FROM product_sync_previews WHERE group_id=?').bind(membership.id).run();
         await db.prepare('DELETE FROM inventory_links WHERE group_id = ?').bind(membership.id).run();
         await db.prepare("UPDATE sync_groups SET status = 'paused' WHERE id = ?")
           .bind(membership.id).run();
@@ -375,6 +411,11 @@ export default {
   },
   async queue(batch, env) {
     for (const message of batch.messages) {
+      if(typeof message.body?.productJobId==='string'){
+        try{const result=await processProductJob(env,message.body.productJobId);if(result.retry)message.retry({delaySeconds:result.delaySeconds??30});else message.ack()}
+        catch(error){console.error('Product sync failed',error);message.retry({delaySeconds:30})}
+        continue;
+      }
       const linkId = message.body?.linkId;
       if (typeof linkId !== 'string') { message.ack(); continue; }
       try {
@@ -390,6 +431,10 @@ export default {
   async scheduled(event, env) {
     const db = env.DB;
     try {
+    const productJobs=(await db.prepare(`SELECT j.id FROM product_sync_jobs j JOIN product_sync_settings s ON s.group_id=j.group_id
+      WHERE j.dirty=1 AND s.enabled=1 AND (j.lock_owner IS NULL OR j.lock_until<=?) LIMIT 50`).bind(Math.floor(Date.now()/1000)).all()).results;
+    for(const job of productJobs)await env.SYNC_QUEUE.send({productJobId:job.id});
+    await db.prepare('DELETE FROM product_sync_previews WHERE expires_at<=?').bind(Math.floor(Date.now()/1000)).run();
     if (event.cron === '7 3 * * *') {
       await db.prepare(`INSERT OR IGNORE INTO sync_jobs (link_id, dirty)
         SELECT l.id, 1 FROM inventory_links l JOIN sync_groups g ON g.id = l.group_id

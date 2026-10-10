@@ -26,6 +26,7 @@
     "SHOPIFY_APP_GID": "gid://shopify/App/433757585409",
     "SHOPIFY_APP_HANDLE": "onlinesync-3",
     "INVENTORY_WRITES_ENABLED": "true",
+    "PRODUCT_WRITES_ENABLED": "true",
     "INVENTORY_WRITE_ALLOWED_SHOPS": "onlinesync-pilot-main.myshopify.com,onlinesync-pilot-second.myshopify.com"
   }
 }
