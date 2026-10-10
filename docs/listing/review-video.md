@@ -12,7 +12,7 @@ Hide account menus, credentials, session tokens, CLI output and the Dev Console.
 
 | Time | Show | Explain |
 | --- | --- | --- |
-| 0:00–0:25 | OnlineSync App Home inside Shopify | “OnlineSync shares available inventory between Shopify stores you manage. One main store sets the starting quantity; later stock changes can come from either store.” |
+| 0:00–0:25 | OnlineSync App Home inside Shopify | “OnlineSync shares available inventory between Shopify stores you manage. One main store sets the starting quantity; later stock changes can come from any connected store.” |
 | 0:25–1:15 | Install on each development store; create and redeem a pairing code | “Install the same app in both stores. The code connects the second store to the main store and expires after ten minutes.” |
 | 1:15–1:55 | Select a stocked location in each store; prepare read-only preview | “Products match through unique SKUs. They must be tracked physical products with selling out of stock disabled. The preview shows what the first copy will do; preparing it does not change stock.” |
 | 1:55–2:25 | Shopify Basic plan page and return to App Home | “Basic is USD 20 monthly with a seven-day trial. These development-store tests are free. The main store's subscription covers the connected group.” Do not imply development approval charges money. |

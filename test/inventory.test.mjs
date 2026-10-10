@@ -29,7 +29,7 @@ function d1(sqlite) {
   };
 }
 
-async function setup(main = 10, child = 10, initialized = 1) {
+async function setup(main = 10, child = 10, initialized = 1, extraStores = []) {
   const sqlite = new DatabaseSync(':memory:');
   for (const name of ['0001_initial.sql', '0002_token_lock.sql', '0003_sync_queue.sql',
     '0004_preview_marker.sql', '0005_billing_cache.sql', '0006_developer_dashboard.sql']) {
@@ -37,7 +37,7 @@ async function setup(main = 10, child = 10, initialized = 1) {
   }
   const db = d1(sqlite);
   const key = randomBytes(32).toString('base64');
-  const stores = ['main.myshopify.com', 'child.myshopify.com'];
+  const stores = ['main.myshopify.com', 'child.myshopify.com', ...extraStores];
   for (const shop of stores) await db.prepare(`INSERT INTO stores
     (shop, access_token_cipher, refresh_token_cipher, token_expires_at, refresh_expires_at)
     VALUES (?, ?, ?, ?, ?)`).bind(shop, await encrypt('token', key),
@@ -47,22 +47,21 @@ async function setup(main = 10, child = 10, initialized = 1) {
     (id, main_shop, status, billing_checked_at, billing_active)
     VALUES ('group','main.myshopify.com','active',?,1)`)
     .bind(Math.floor(Date.now() / 1000)).run();
-  for (const [shop, role] of [['main.myshopify.com', 'main'], ['child.myshopify.com', 'child']]) {
+  for (const [shop, role] of stores.map(shop=>[shop,shop==='main.myshopify.com'?'main':'child'])) {
     await db.prepare(`INSERT INTO group_stores (group_id,shop,role,location_id)
       VALUES ('group',?,?, 'gid://shopify/Location/1')`).bind(shop, role).run();
   }
   await db.prepare(`INSERT INTO inventory_links
     (id,group_id,sku,shared_quantity,status,initialized)
     VALUES ('link','group','SKU',?,'active',?)`).bind(main, initialized).run();
-  for (const [shop, quantity, id] of [
-    ['main.myshopify.com', main, '1'], ['child.myshopify.com', child, '2']]) {
+  for (const [shop, quantity, id] of stores.map((shop,index)=>[shop,index===0?main:child,String(index+1)])) {
     await db.prepare(`INSERT INTO inventory_members
       (link_id,shop,inventory_item_id,location_id,last_quantity)
       VALUES ('link',?,?,'gid://shopify/Location/1',?)`)
       .bind(shop, `gid://shopify/InventoryItem/${id}`, quantity).run();
   }
   await db.prepare("INSERT INTO sync_jobs (link_id,dirty) VALUES ('link',1)").run();
-  const quantities = { 'main.myshopify.com': main, 'child.myshopify.com': child };
+  const quantities = Object.fromEntries(stores.map((shop,index)=>[shop,index===0?main:child]));
   const writes = [];
   const eligibility = {};
   const failures = {};
@@ -101,13 +100,42 @@ async function setup(main = 10, child = 10, initialized = 1) {
     throw new Error(`Unexpected Shopify request: ${query}`);
   };
   const env = { DB: db, TOKEN_ENCRYPTION_KEY: key, INVENTORY_WRITES_ENABLED: 'true',
-    INVENTORY_WRITE_ALLOWED_SHOPS: 'main.myshopify.com,child.myshopify.com',
+    INVENTORY_WRITE_ALLOWED_SHOPS: stores.join(','),
     SHOPIFY_API_VERSION: '2026-07', SHOPIFY_PARTNER_ORG_ID: 'org',
     SHOPIFY_PARTNER_API_ACCESS_TOKEN: 'partner-token', SHOPIFY_APP_GID: 'app',
     SHOPIFY_APP_HANDLE: 'online-sync' };
   return { sqlite, db, env, quantities, writes, eligibility, failures, attempts,
     close() { globalThis.fetch = originalFetch; sqlite.close(); } };
 }
+
+test('four-store initial copy and sales from every store update all three peers without echoing', async () => {
+  const state = await setup(10,8,0,['third.myshopify.com','fourth.myshopify.com']);
+  try {
+    await processLink(state.env,'link');
+    assert.equal(state.writes.length,3);
+    assert.deepEqual(Object.values(state.quantities),[10,10,10,10]);
+    let target=10;
+    for (const origin of Object.keys(state.quantities)) {
+      state.writes.length=0; state.quantities[origin]=--target;
+      await processLink(state.env,'link');
+      assert.equal(state.writes.length,3);
+      assert.ok(state.writes.every(write=>write.shop!==origin&&write.to===target));
+      assert.ok(Object.values(state.quantities).every(quantity=>quantity===target));
+      await processLink(state.env,'link');
+      assert.equal(state.writes.length,3,'Copy acknowledgements must not reduce stock again');
+    }
+  } finally { state.close(); }
+});
+
+test('concurrent changes in a four-store group block the SKU without writing any peer', async () => {
+  const state=await setup(10,10,1,['third.myshopify.com','fourth.myshopify.com']);
+  try {
+    state.quantities['third.myshopify.com']=9; state.quantities['fourth.myshopify.com']=8;
+    await processLink(state.env,'link');
+    assert.equal(state.writes.length,0);
+    assert.equal(state.sqlite.prepare("SELECT status FROM inventory_links WHERE id='link'").get().status,'blocked');
+  } finally { state.close(); }
+});
 
 test('conflict review stages the main baseline without writing, then resume applies it', async () => {
   const state = await setup();

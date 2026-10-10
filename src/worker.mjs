@@ -1,7 +1,7 @@
 import { verifySessionToken, verifyWebhook, validShop } from './security.mjs';
 import { exchangeOfflineToken, listLocations, saveToken } from './shopify.mjs';
 import { listEligibleVariants, matchingCatalogs } from './catalog.mjs';
-import { createPairingCode, redeemPairingCode } from './pairing.mjs';
+import { createPairingCode, redeemPairingCode, MAX_GROUP_STORES } from './pairing.mjs';
 import { appPage } from './app-page.mjs';
 import { customerActivity } from './customer-activity.mjs';
 import { publicPage } from './public-pages.mjs';
@@ -72,7 +72,8 @@ async function status(db, shop, env) {
   return { currentShop: shop, group: { id: group.id, mainShop: group.main_shop, role: group.role,
       status: group.status, billing },
     stores: members.results, links: Number(counts.links), blocked: Number(counts.blocked ?? 0),
-    canPair: group.role === 'main' && group.status !== 'active' && Number(counts.established ?? 0) === 0,
+    maxStores: MAX_GROUP_STORES,
+    canPair: group.role === 'main' && members.results.length < MAX_GROUP_STORES && group.status !== 'active' && Number(counts.established ?? 0) === 0,
     canPreview: group.role === 'main' && group.status !== 'active' && Number(counts.established ?? 0) === 0 &&
       members.results.length >= 2 && members.results.every(member => member.location_id && !member.uninstalled_at),
     recent: customerActivity(recent.results, group.main_shop), blockedLinks: blockedLinks.results, pendingPreview: pendingPreview.results,
@@ -91,6 +92,7 @@ async function preview(db, group, env) {
   if (members.length < 2 || members.some(m => !m.location_id)) {
     return json({ error: 'Connect at least two stores and choose a location in each' }, 409);
   }
+  if (members.length > MAX_GROUP_STORES) return json({ error: 'Groups support up to four stores' }, 409);
   const main = members.find(m => m.role === 'main');
   const children = members.filter(m => m.role === 'child');
   const [source, ...targets] = await Promise.all(members.map(m =>
@@ -131,7 +133,8 @@ async function preview(db, group, env) {
     .bind(group.id).run();
   return json({ matched: matches.length, mainEligible: source.size,
     sample: matches.slice(0, 30).map(m => ({ sku: m.sku, mainQuantity: m.source.quantity,
-      childQuantities: m.children.map(c => c.quantity) })) });
+      childQuantities: m.children.map(c => c.quantity),
+      childStocks: m.children.map((c, index) => ({ shop: children[index].shop, quantity: c.quantity })) })) });
 }
 
 async function control(db, group, env, input) {
@@ -150,6 +153,7 @@ async function control(db, group, env, input) {
   if (stores.length < 2 || stores.some(s => !s.location_id || s.uninstalled_at)) {
     return json({ error: 'Connect and configure at least two installed stores' }, 409);
   }
+  if (stores.length > MAX_GROUP_STORES) return json({ error: 'Groups support up to four stores' }, 409);
   if (!shopsAllowedToWrite(env, stores.map(store => store.shop))) {
     return json({ error: 'Inventory writes are restricted to the configured pilot stores' }, 409);
   }
@@ -237,14 +241,7 @@ async function merchantApi(request, env, path) {
       const input = await request.json();
       const joined = await redeemPairingCode(db, user.shop, group.id,
         String(input.code ?? '').trim().toUpperCase());
-      if (!joined) return json({ error: 'Code invalid or expired' }, 400);
-      const newGroup = await currentGroup(db, user.shop);
-      await db.batch([
-        db.prepare("DELETE FROM inventory_links WHERE group_id = ? AND status = 'preview'")
-          .bind(newGroup.id),
-        db.prepare('UPDATE sync_groups SET preview_completed_at = NULL WHERE id = ?')
-          .bind(newGroup.id)
-      ]);
+      if (!joined) return json({ error: 'Code invalid, expired, or unavailable. Groups support up to four stores; connect them before starting sync.' }, 400);
       return json(await status(db, user.shop, env));
     }
     if (path === '/api/preview' && request.method === 'POST') return preview(db, group, env);

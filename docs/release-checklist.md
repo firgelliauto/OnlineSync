@@ -5,6 +5,7 @@
 - Separate Cloudflare Worker, D1 database, and Queue; original syncApp untouched.
 - Public Shopify app configuration, minimum inventory scopes, signed inventory/uninstall/privacy webhooks.
 - Two development-store installs, pairing, location selection and read-only baseline preview.
+- Four-store support: pairing capacity, preview invalidation, initial copies, sales in all four directions, echoes, concurrent-change blocking, and paginated previews have automated coverage. A live four-store pilot still needs validation before launch.
 - Main-store Shopify Basic test subscription and Partner API verification; USD 20 monthly, seven-day trial.
 - Initial stock copy, changes from either store, and actual free development-store orders in both directions.
 - Pause, conflicting-change blocking, durable recovery preview, baseline recovery and echo checks.

@@ -6,7 +6,7 @@ const slides = [
     'Install the same app in each store|Enter the main store’s pairing code|Each code expires after ten minutes', 'pairing-full.jpg', 269, 198],
   ['preview', 'Review stock before syncing.', 'Match variants by SKU and inspect the proposed quantities.',
     'Preview matching tracked products|Compare main and connected-store quantities|No inventory changes during preview', 'preview-full.jpg', 291, 176],
-  ['feature', 'One shared stock pool.', 'Your main store supplies the starting quantity. Stock changes can come from either store.',
+  ['feature', 'One shared stock pool.', 'Your main store supplies the starting quantity. Stock changes can come from any connected store.',
     'Connect your Shopify stores|Match variants by unique SKU|Review quantities before activation', 'preview-full.jpg', 291, 176]
 ];
 for (const [name,title,summary,features,screenshot,height,y] of slides) {

@@ -6,7 +6,7 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { encrypt } from '../src/security.mjs';
 import worker from '../src/worker.mjs';
 
-test('a paginated 260-variant preview respects D1 limits and excludes all duplicate SKUs', async () => {
+for (const storeCount of [2,4]) test(`a ${storeCount}-store paginated 260-variant preview respects D1 limits and excludes all duplicate SKUs`, async () => {
   const sqlite = new DatabaseSync(':memory:');
   const originalFetch = globalThis.fetch;
   const boundCounts = [];
@@ -18,7 +18,8 @@ test('a paginated 260-variant preview respects D1 limits and excludes all duplic
     const key = randomBytes(32).toString('base64');
     const now = Math.floor(Date.now() / 1000);
     const access = await encrypt('test-token', key);
-    for (const shop of ['main.myshopify.com', 'child.myshopify.com']) {
+    const shops = ['main.myshopify.com', 'child.myshopify.com', 'third.myshopify.com', 'fourth.myshopify.com'].slice(0,storeCount);
+    for (const shop of shops) {
       sqlite.prepare(`INSERT INTO stores
         (shop,access_token_cipher,refresh_token_cipher,token_expires_at,refresh_expires_at)
         VALUES (?,?,?, ?,?)`).run(shop, access, access, now + 3600, now + 86400);
@@ -27,6 +28,8 @@ test('a paginated 260-variant preview respects D1 limits and excludes all duplic
       INSERT INTO group_stores (group_id,shop,role,location_id) VALUES
       ('group','main.myshopify.com','main','gid://shopify/Location/1'),
       ('group','child.myshopify.com','child','gid://shopify/Location/1');`);
+    for (const shop of shops.slice(2)) sqlite.prepare(`INSERT INTO group_stores (group_id,shop,role,location_id)
+      VALUES ('group',?,'child','gid://shopify/Location/1')`).run(shop);
     const db = { prepare(sql) {
       const make = values => ({
         run: async () => ({ meta: { changes: Number(sqlite.prepare(sql).run(...values).changes) } }),
@@ -77,14 +80,23 @@ test('a paginated 260-variant preview respects D1 limits and excludes all duplic
       method: 'POST', headers: { Authorization: `Bearer ${token}` }
     }), { DB: db, TOKEN_ENCRYPTION_KEY: key, SHOPIFY_CLIENT_ID: 'client', SHOPIFY_CLIENT_SECRET: 'secret' });
     assert.equal(response.status, 200);
-    assert.equal((await response.json()).matched, 256);
-    assert.equal(pages.length, 6);
+    const preview = await response.json();
+    assert.equal(preview.matched, 256);
+    assert.equal(preview.sample[0].childStocks.length,storeCount-1);
+    assert.deepEqual(preview.sample[0].childStocks.map(row=>row.shop),shops.slice(1).sort());
+    assert.equal(pages.length, storeCount*3);
     assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM inventory_links').get().count, 256);
-    assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM inventory_members').get().count, 512);
+    assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM inventory_members').get().count, 256*storeCount);
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM inventory_links WHERE sku IN ('SKU-000','SKU-001')").get().count, 0);
     assert.ok(sqlite.prepare('SELECT preview_completed_at FROM sync_groups').get().preview_completed_at);
     assert.ok(boundCounts.some(count => count === 100));
     const env = { DB: db, TOKEN_ENCRYPTION_KEY: key, SHOPIFY_CLIENT_ID: 'client', SHOPIFY_CLIENT_SECRET: 'secret' };
+    const statusResponse = await worker.fetch(new Request('https://example.test/api/status',
+      {headers:{Authorization:`Bearer ${token}`}}),env);
+    const status = await statusResponse.json();
+    assert.equal(status.maxStores,4);
+    assert.equal(status.stores.length,storeCount);
+    assert.equal(status.canPair,storeCount<4);
     const inventory = async params => {
       const response = await worker.fetch(new Request('https://example.test/api/inventory?' + params,
         { headers: { Authorization: `Bearer ${token}` } }), env);
