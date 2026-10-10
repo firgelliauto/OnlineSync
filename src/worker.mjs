@@ -4,11 +4,12 @@ import { listEligibleVariants, matchingCatalogs } from './catalog.mjs';
 import { createPairingCode, redeemPairingCode } from './pairing.mjs';
 import { appPage } from './app-page.mjs';
 import { publicPage } from './public-pages.mjs';
-import { activeSubscription } from './billing.mjs';
+import { activeSubscription, refreshSubscriptionSnapshots } from './billing.mjs';
 import { enqueueLinks, processLink } from './inventory.mjs';
 import { shopsAllowedToWrite } from './write-policy.mjs';
 import { prepareConflictPreview } from './conflicts.mjs';
 import { inventoryPage } from './inventory-view.mjs';
+import { heartbeat, recordIssue, resolveIssue } from './operations.mjs';
 
 const json = (data, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
 const invalidSession = () => new Response(JSON.stringify({ error: 'Invalid Shopify session' }), {
@@ -182,7 +183,9 @@ async function merchantApi(request, env, path) {
   try {
     if (path === '/api/bootstrap' && request.method === 'POST') {
       await bootstrap(db, user.shop, idToken, env);
-      return json(await status(db, user.shop, env));
+      const data = await status(db, user.shop, env);
+      await resolveIssue(db, 'merchant:' + user.shop);
+      return json(data);
     }
     const store = await db.prepare('SELECT shop FROM stores WHERE shop = ? AND uninstalled_at IS NULL')
       .bind(user.shop).first();
@@ -257,6 +260,12 @@ async function merchantApi(request, env, path) {
   } catch (error) {
     console.error('Merchant API error', error);
     if (error instanceof SyntaxError) return json({ error: 'Invalid JSON' }, 400);
+    if (!error.status || error.status >= 500) {
+      try {
+        const membership = await currentGroup(db, user.shop);
+        await recordIssue(db, 'merchant:' + user.shop, 'app', error, membership?.id ?? null);
+      } catch (diagnosticError) { console.error('Merchant diagnostic recording failed', diagnosticError); }
+    }
     return json({ error: error.message || 'Request failed' }, error.status || 500);
   }
 }
@@ -320,7 +329,7 @@ async function webhook(request, env, path) {
       if (link.status === 'active') {
         await db.prepare('INSERT OR IGNORE INTO sync_jobs (link_id, dirty) VALUES (?, 1)')
           .bind(link.id).run();
-        await db.prepare('UPDATE sync_jobs SET dirty = 1 WHERE link_id = ?').bind(link.id).run();
+        await db.prepare('UPDATE sync_jobs SET dirty = 1,updated_at=CURRENT_TIMESTAMP WHERE link_id = ?').bind(link.id).run();
         if (link.group_status === 'active') await env.SYNC_QUEUE.send({ linkId: link.id });
       }
     }
@@ -352,8 +361,16 @@ export default {
     }
     if (url.pathname.startsWith('/api/')) return merchantApi(request, env, url.pathname);
     if (request.method === 'POST' && url.pathname.startsWith('/webhooks/')) {
-      try { return await webhook(request, env, url.pathname); }
-      catch (error) { console.error('Webhook error', error); return json({ error: 'Webhook failed' }, 500); }
+      try {
+        const response = await webhook(request, env, url.pathname);
+        if (response.status === 200) await resolveIssue(env.DB, 'webhook:' + url.pathname);
+        return response;
+      } catch (error) {
+        console.error('Webhook error', error);
+        try { await recordIssue(env.DB, 'webhook:' + url.pathname, 'webhook', error); }
+        catch (diagnosticError) { console.error('Webhook diagnostic recording failed', diagnosticError); }
+        return json({ error: 'Webhook failed' }, 500);
+      }
     }
     return json({ error: 'Not found' }, 404);
   },
@@ -373,6 +390,7 @@ export default {
   },
   async scheduled(event, env) {
     const db = env.DB;
+    try {
     if (event.cron === '7 3 * * *') {
       await db.prepare(`INSERT OR IGNORE INTO sync_jobs (link_id, dirty)
         SELECT l.id, 1 FROM inventory_links l JOIN sync_groups g ON g.id = l.group_id
@@ -392,10 +410,19 @@ export default {
         AND (j.lock_owner IS NULL OR j.lock_until <= ?) LIMIT 100`)
         .bind(Math.floor(Date.now() / 1000)).all()).results;
       await enqueueLinks(env, jobs.map(x => x.link_id));
+      await refreshSubscriptionSnapshots(db, env);
       await db.prepare("DELETE FROM webhook_deliveries WHERE received_at < datetime('now', '-7 days')").run();
       await db.prepare("DELETE FROM pairing_codes WHERE expires_at < ? OR used_at < datetime('now', '-1 day')")
         .bind(Math.floor(Date.now() / 1000)).run();
       await db.prepare("DELETE FROM sync_events WHERE created_at < datetime('now', '-90 days')").run();
+      await db.prepare("DELETE FROM operational_issues WHERE resolved_at < datetime('now', '-30 days')").run();
+    }
+    await heartbeat(db, event.cron === '7 3 * * *' ? 'daily-reconciliation' : 'queue-recovery');
+    await resolveIssue(db, 'scheduler:' + event.cron);
+    } catch (error) {
+      try { await recordIssue(db, 'scheduler:' + event.cron, 'scheduler', error); }
+      catch (diagnosticError) { console.error('Scheduler diagnostic recording failed', diagnosticError); }
+      throw error;
     }
   }
 };

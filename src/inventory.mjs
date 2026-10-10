@@ -2,6 +2,7 @@ import { adminGraphql } from './shopify.mjs';
 import { activeSubscription } from './billing.mjs';
 import { planSharedQuantity } from './sync-plan.mjs';
 import { shopsAllowedToWrite } from './write-policy.mjs';
+import { recordIssue, resolveIssue } from './operations.mjs';
 
 export async function readQuantity(db, member, sku, env) {
   const data = await adminGraphql(db, member.shop, env, `query Quantity($item: ID!, $location: ID!) {
@@ -62,6 +63,7 @@ async function block(db, link, reason) {
     db.prepare('UPDATE sync_jobs SET dirty = 0 WHERE link_id = ?').bind(link.id)
   ]);
   await log(db, link, null, 'blocked', `${link.sku}: ${reason}`);
+  await resolveIssue(db, 'sync:' + link.id);
 }
 
 async function processWrites(db, link, members, env) {
@@ -181,6 +183,7 @@ export async function processLink(env, linkId) {
         return { retry: true, delaySeconds: 1 };
       }
     } else await reconcile(db, link, members, env);
+    await resolveIssue(db, 'sync:' + linkId);
     return { retry: false };
   } catch (error) {
     console.error('Sync failed for link', linkId, error);
@@ -190,6 +193,11 @@ export async function processLink(env, linkId) {
       return { retry: false };
     }
     await db.prepare('UPDATE sync_jobs SET dirty = 1 WHERE link_id = ?').bind(linkId).run();
+    const failedLink = await db.prepare('SELECT group_id FROM inventory_links WHERE id=?').bind(linkId).first();
+    if (failedLink) {
+      try { await recordIssue(db, 'sync:' + linkId, 'sync', error, failedLink.group_id, linkId); }
+      catch (diagnosticError) { console.error('Sync diagnostic recording failed', diagnosticError); }
+    }
     return { retry: true, delaySeconds: 30 };
   } finally {
     await db.prepare(`UPDATE sync_jobs SET lock_owner = NULL, lock_until = 0

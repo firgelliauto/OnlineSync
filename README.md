@@ -13,7 +13,9 @@ OnlineSync hosting:
 - Queue: `online-sync-jobs`
 - Token encryption key: stored as an OnlineSync Worker secret, with a local backup in ignored `.dev.vars`.
 
-The URL suffix is the Cloudflare account's shared Workers subdomain. OnlineSync is a separate Worker; it does not bind to the original syncApp's state or resources. All five database migrations have been applied only to the new OnlineSync database.
+The URL suffix is the Cloudflare account's shared Workers subdomain. OnlineSync is a separate Worker; it does not bind to the original syncApp's state or resources. All six database migrations have been applied only to the new OnlineSync database.
+
+A separate private developer dashboard is at `https://online-sync-admin.firgelli-inventory-sync.workers.dev`. It summarizes subscriptions, activity, incidents, and recovery health without customer SKU lists. See [the dashboard runbook](docs/developer-dashboard.md).
 
 Shopify account setup note: an unused development app named OnlineSync was created under the Firgelli merchant organization (`105534`, app `433756733441`). That organization does not expose public distribution. The app has no installations and its credentials have not been connected to Cloudflare. Do not use it for the public launch: the public app must be created under a Shopify Partner organization. No existing Shopify app was changed.
 
@@ -98,7 +100,7 @@ Configure a monthly plan in Shopify App Pricing and provide the Partner organiza
 
 ## Verification and remaining work
 
-`npm test` currently passes 26 tests covering Shopify token and webhook verification, token encryption, one-use pairing, initial copy, main and child sales, echoed writes, simultaneous-change blocking, recovery previews, changed inventory policies, pilot isolation, deleted queue jobs, uninstall, and store redaction. Failure-injection checks verify that interrupted writes reuse their original idempotency key, a lost response does not replay a stock change, and a sale during recovery receives a fresh reconciliation. A 260-variant, three-page-per-store preview verifies duplicate detection across pages and D1's 100-bound-parameter limit. Database migrations and the Worker deployment have succeeded. Live installation, billing approval, two-store sale propagation, pause, conflict detection, recovery, and second-store uninstall/reinstall have been verified on the named development stores. Public merchant writes remain disabled by the pilot allowlist.
+`npm test` currently passes 31 tests covering Shopify token and webhook verification, token encryption, one-use pairing, initial copy, main and child sales, echoed writes, simultaneous-change blocking, recovery previews, changed inventory policies, pilot isolation, deleted queue jobs, uninstall, and store redaction. Failure-injection checks verify that interrupted writes reuse their original idempotency key, a lost response does not replay a stock change, and a sale during recovery receives a fresh reconciliation. A 260-variant, three-page-per-store preview verifies duplicate detection across pages and D1's 100-bound-parameter limit. Database migrations and the Worker deployment have succeeded. Live installation, billing approval, two-store sale propagation, pause, conflict detection, recovery, and second-store uninstall/reinstall have been verified on the named development stores. Public merchant writes remain disabled by the pilot allowlist.
 
 Remaining integration work includes subscription changes, real catalog load and rate limits, controlled network interruption, and simultaneous-order timing. Token refresh, uninstall/reinstall, HMAC delivery, pause/resume, and two-store propagation have passed on the development stores; privacy deletion and retry failure cases have automated coverage. Product descriptions, images, prices, and SEO fields should receive field-level sync rules and previews before being added to the live write path.
 
