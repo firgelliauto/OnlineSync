@@ -10,7 +10,7 @@ export function customerActivity(events, mainShop) {
   const names = { inventory_webhook: 'Order or stock change received', stock_change: 'Stock change detected',
     inventory_write: 'Quantity updated', initialized: 'SKU initialized', blocked: 'SKU blocked',
     paused: 'Sync paused', preview: 'Stock preview prepared', conflict_preview: 'Recovery preview prepared',
-    product_sync: 'Product fields copied', product_sync_error: 'Product copy needs attention' };
+    product_sync: 'Product fields copied', product_created_draft: 'Product draft created', product_sync_error: 'Product copy needs attention' };
   const changes = new Map();
   for (const event of rows) {
     if (!event.link_id) continue;

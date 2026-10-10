@@ -2,6 +2,8 @@
 
 ## Completed
 
+- Optional draft creation and per-store price rules implemented with missing-product offers, explicit previews, unchanged existing variant identities, and recovery tests across two/three/four stores. Draft creation is excluded from automatic/catalog work. Live customer UI creation passed on the two pilot stores, including images, two variants, zero stock, calculated price/compare-at values, and subsequent automatic price-rule propagation. Automatic copying is off and rules reset to zero after testing.
+
 - Separate Cloudflare Worker, D1 database, and Queue; original syncApp untouched.
 - Public Shopify app configuration, minimum inventory scopes, signed inventory/uninstall/privacy webhooks.
 - Two development-store installs, pairing, location selection and read-only baseline preview.

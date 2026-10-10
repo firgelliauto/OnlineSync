@@ -206,10 +206,10 @@ async function merchantApi(request, env, path) {
       return json({ok:true});
     }
     if (path === '/api/product-settings' && request.method === 'POST') {
-      const input=await request.json();return json(await saveProductSettings(db,group,input.fields,input.enabled));
+      const input=await request.json();return json(await saveProductSettings(db,group,input.fields,input.enabled,input.priceRules));
     }
     if (path === '/api/product-preview' && request.method === 'POST') {
-      const input=await request.json();return json(await previewProduct(db,group,input.sku,env));
+      const input=await request.json();return json(await previewProduct(db,group,input.sku,env,input.createMissing??false));
     }
     if (path === '/api/product-apply' && request.method === 'POST') {
       const input=await request.json();if(typeof input.previewId!=='string'||input.previewId.length>100)return json({error:'Choose a product preview'},400);

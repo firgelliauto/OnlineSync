@@ -4,7 +4,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync,readdirSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { encrypt } from '../src/security.mjs';
-import { productPlan,selectedFields,saveProductSettings,previewProduct,applyProductPreview,queueProduct,processProductJob } from '../src/product-sync.mjs';
+import {adjustedPrice} from '../src/price-rules.mjs';
+import {createDraft} from '../src/product-drafts.mjs';
+import { draftPlan,productPlan,selectedFields,saveProductSettings,previewProduct,applyProductPreview,queueProduct,processProductJob } from '../src/product-sync.mjs';
 
 function adapter(sqlite){return {prepare(sql){const make=values=>({run:async()=>({meta:{changes:Number(sqlite.prepare(sql).run(...values).changes)}}),first:async()=>sqlite.prepare(sql).get(...values)??null,all:async()=>({results:sqlite.prepare(sql).all(...values)})});return {...make([]),bind:(...values)=>make(values)}},async batch(statements){sqlite.exec('BEGIN');try{const result=[];for(const s of statements)result.push(await s.run());sqlite.exec('COMMIT');return result}catch(e){sqlite.exec('ROLLBACK');throw e}}}}
 function product(id,title='Main title'){return {id,title,handle:'keep-this-url',descriptionHtml:'<p>Main description</p>',vendor:'Vendor',productType:'Type',tags:['b','a'],seo:{title:'SEO',description:'Search text'},currency:'USD',
@@ -21,7 +23,10 @@ async function fixture(count=2){
   const env={DB:db,TOKEN_ENCRYPTION_KEY:key,PRODUCT_WRITES_ENABLED:'true',INVENTORY_WRITES_ENABLED:'true',INVENTORY_WRITE_ALLOWED_SHOPS:shops.join(','),SHOPIFY_PARTNER_ORG_ID:'org',SHOPIFY_PARTNER_API_ACCESS_TOKEN:'token',SHOPIFY_APP_GID:'app',SHOPIFY_APP_HANDLE:'app',SYNC_QUEUE:{send:async body=>sent.push(body)}};
   const failure={once:false};
   globalThis.fetch=async(url,options)=>{const shop=new URL(url).hostname,p=products.get(shop);const {query,variables}=JSON.parse(options.body);
-    if(query.includes('query MatchProduct'))return Response.json({data:{productVariants:{nodes:p.variants.map(v=>({...v,product:{id:p.id}})),pageInfo:{hasNextPage:false}}}});
+    if(query.includes('query MatchProduct'))return Response.json({data:{productVariants:{nodes:(p?.variants??[]).map(v=>({...v,product:{id:p.id}})),pageInfo:{hasNextPage:false}}}});
+    if(query.includes('query DraftCurrency'))return Response.json({data:{shop:{currencyCode:failure.currency??'USD'}}});
+    if(query.includes('query DraftHandle'))return Response.json({data:{productByIdentifier:p?.handle===variables.handle?{...p,variants:{nodes:p.variants,pageInfo:{hasNextPage:false}}}:null}});
+    if(query.includes('mutation CreateSyncDraft')){writes.push({shop,...variables});const input=variables.input;const created={...product('gid://shopify/Product/999'),...input,currency:'USD',media:[],options:input.productOptions.map((o,i)=>({...o,id:'new-option-'+i,optionValues:o.values})),variants:input.variants.map((v,i)=>({...v,id:'new-variant-'+i,selectedOptions:v.optionValues.map(o=>({name:o.optionName,value:o.name}))}))};products.set(shop,created);if(failure.once){failure.once=false;throw Error('Response lost after draft creation')}return Response.json({data:{productSet:{product:{id:created.id,status:created.status},userErrors:[]}}});}
     if(query.includes('query SyncProduct'))return Response.json({data:{shop:{currencyCode:p.currency},product:{...p,variants:{nodes:p.variants,pageInfo:{hasNextPage:false}},media:{nodes:p.media,pageInfo:{hasNextPage:false}}}}});
     if(query.includes('query ProductScopes'))return Response.json({data:{currentAppInstallation:{accessScopes:[{handle:'write_products'},{handle:'read_files'}]}}});
     if(query.includes('query ExistingSyncImage'))return Response.json({data:{files:{nodes:[]}}});
@@ -74,4 +79,72 @@ test('automatic image retries reuse deterministic files, preserve local videos a
 });
 test('deleted product jobs are acknowledged instead of retrying forever',async()=>{
  const f=await fixture();try{assert.deepEqual(await processProductJob(f.env,'deleted-job'),{retry:false});}finally{f.close()}
+});
+test('price rules use currency precision, percentage then fixed adjustment and explicit rounding',()=>{
+ assert.equal(adjustedPrice('20.00',{percent:'10',amount:'3'},'USD'),'25.00');
+ assert.equal(adjustedPrice('20.00',{percent:'-10',amount:'-1'},'USD'),'17.00');
+ assert.equal(adjustedPrice('19.20',{rounding:'whole'},'USD'),'19.00');
+ assert.equal(adjustedPrice('19.20',{rounding:'up99'},'USD'),'19.99');
+ assert.equal(adjustedPrice('19.99',{rounding:'up99'},'USD'),'19.99');
+ assert.equal(adjustedPrice('100.00',{percent:'10'},'JPY'),'110');
+ assert.equal(adjustedPrice('1.234',{amount:'0.001'},'BHD'),'1.235');
+ assert.equal(adjustedPrice(null,{percent:'10'},'USD'),null);
+ assert.throws(()=>adjustedPrice('1',{amount:'-2'},'USD'),/negative/);
+ assert.throws(()=>adjustedPrice('1',{percent:'NaN'},'USD'),/valid/);
+ assert.throws(()=>adjustedPrice('1',{rounding:'up99'},'JPY'),/two decimal/);
+});
+test('per-store price rules isolate peers, respect field choices and invalidate previews',async()=>{
+ const f=await fixture(3);try{
+  await saveProductSettings(f.db,f.group,['price'],false,{[f.shops[1]]:{percent:'10',amount:'3'},[f.shops[2]]:{percent:'-10',rounding:'up99'}});
+  const preview=await previewProduct(f.db,f.group,'SKU-0',f.env);await applyProductPreview(f.db,f.group,preview.id,f.env);
+  assert.equal(f.products.get(f.shops[1]).variants[0].price,'25.00');assert.equal(f.products.get(f.shops[2]).variants[0].price,'18.99');
+  assert.equal(f.products.get(f.shops[1]).variants[0].compareAtPrice,'25.00');assert.equal(f.products.get(f.shops[1]).title,'Local title');
+  const stale=await previewProduct(f.db,f.group,'SKU-0',f.env);await saveProductSettings(f.db,f.group,['price'],false,{});await assert.rejects(applyProductPreview(f.db,f.group,stale.id,f.env),/settings changed/);
+  await assert.rejects(saveProductSettings(f.db,f.group,['price'],false,{'foreign.myshopify.com':{percent:'10'}}),/connected stores/);
+  const plan=await productPlan(f.products.get(f.shops[0]),f.products.get(f.shops[1]),['compareAtPrice'],{percent:'10',amount:'3',applyToCompareAt:true});assert.equal(plan.variants[0].compareAtPrice,'30.50');
+ }finally{f.close()}
+});
+for(const count of [2,3,4])test(`missing products require opt-in previews and create unpublished drafts across ${count} stores`,async()=>{
+ const f=await fixture(count);try{
+  for(const shop of f.shops.slice(1))f.products.delete(shop);
+  await saveProductSettings(f.db,f.group,['price','descriptionHtml'],false,{[f.shops[1]]:{percent:'10'}});
+  let preview=await previewProduct(f.db,f.group,'SKU-0',f.env);assert.ok(preview.targets.every(t=>t.missing&&!t.createDraft));assert.equal(f.writes.length,0);
+  preview=await previewProduct(f.db,f.group,'SKU-0',f.env,true);assert.ok(preview.targets.every(t=>t.createDraft));assert.equal(f.writes.length,0);
+  const result=await applyProductPreview(f.db,f.group,preview.id,f.env);assert.equal(result.drafts,count-1);
+  for(const shop of f.shops.slice(1)){const product=f.products.get(shop);assert.equal(product.status,'DRAFT');assert.equal(product.variants.length,2);assert.equal(product.variants[0].sku,'SKU-0');assert.ok(product.variants.every(v=>!('inventoryQuantities'in v)));assert.ok(!('publications'in product));}
+  assert.equal(f.products.get(f.shops[1]).variants[0].price,'22.00');
+  await assert.rejects(applyProductPreview(f.db,f.group,preview.id,f.env),/expired/);assert.equal(f.writes.length,count-1);
+ }finally{f.close()}
+});
+test('partial SKU matches block creation and automatic jobs never create missing products',async()=>{
+ const f=await fixture();try{
+  f.products.get(f.shops[1]).variants.pop();await saveProductSettings(f.db,f.group,['price'],false);
+  await assert.rejects(previewProduct(f.db,f.group,'SKU-0',f.env,true),/missing/);assert.equal(f.writes.length,0);
+  f.products.delete(f.shops[1]);await saveProductSettings(f.db,f.group,['title'],true);await queueProduct(f.env,f.group.id,f.products.get(f.shops[0]).id);await processProductJob(f.env,f.sent[0].productJobId);assert.equal(f.writes.length,0);
+ }finally{f.close()}
+});
+test('a lost draft-creation response recovers the existing draft without creating or resetting it',async()=>{
+ const f=await fixture();try{
+  f.products.delete(f.shops[1]);await saveProductSettings(f.db,f.group,['price'],false);const preview=await previewProduct(f.db,f.group,'SKU-0',f.env,true);f.failure.once=true;
+  await assert.rejects(applyProductPreview(f.db,f.group,preview.id,f.env),/Response lost/);const draft=f.products.get(f.shops[1]);draft.status='ACTIVE';draft.title='Merchant edit';
+  const result=await createDraft(f.db,f.group,f.products.get(f.shops[0]),f.shops[1],{},f.env);assert.equal(result,draft.id);assert.equal(f.writes.length,1);assert.equal(draft.status,'ACTIVE');assert.equal(draft.title,'Merchant edit');
+ }finally{f.close()}
+});
+test('temporary image source URLs do not invalidate a reviewed product preview',async()=>{
+ const f=await fixture();try{
+  const source=f.products.get(f.shops[0]);source.media[0].originalSource={url:'https://temporary.example/first'};
+  await saveProductSettings(f.db,f.group,['title'],false);const preview=await previewProduct(f.db,f.group,'SKU-0',f.env);
+  source.media[0].originalSource.url='https://temporary.example/rotated';await applyProductPreview(f.db,f.group,preview.id,f.env);assert.equal(f.writes.length,1);
+ }finally{f.close()}
+});
+test('draft previews reject cross-currency prices and a product appearing before apply',async()=>{
+ const f=await fixture();try{
+  f.products.delete(f.shops[1]);await saveProductSettings(f.db,f.group,['price'],false);f.failure.currency='CAD';await assert.rejects(previewProduct(f.db,f.group,'SKU-0',f.env,true),/currencies/);
+  f.failure.currency='USD';const preview=await previewProduct(f.db,f.group,'SKU-0',f.env,true);f.products.set(f.shops[1],product('appeared'));
+  await assert.rejects(applyProductPreview(f.db,f.group,preview.id,f.env),/changed since preview/);assert.equal(f.writes.length,0);
+ }finally{f.close()}
+});
+test('new draft essentials do not copy unchecked content, stock or unsupported gift cards and bundles',async()=>{
+ const source=product('source');const plan=await draftPlan(source,['title']);assert.equal(plan.input.title,source.title);assert.ok(!('descriptionHtml'in plan.input)&&!('files'in plan.input));assert.ok(plan.input.variants.every(v=>v.price==='0'&&!('inventoryQuantities'in v)));
+ source.isGiftCard=true;await assert.rejects(draftPlan(source,['title']),/Gift cards/);source.isGiftCard=false;source.variants[0].requiresComponents=true;await assert.rejects(draftPlan(source,['title']),/bundle/);
 });
