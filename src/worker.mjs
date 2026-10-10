@@ -3,6 +3,7 @@ import { exchangeOfflineToken, listLocations, saveToken } from './shopify.mjs';
 import { listEligibleVariants, matchingCatalogs } from './catalog.mjs';
 import { createPairingCode, redeemPairingCode } from './pairing.mjs';
 import { appPage } from './app-page.mjs';
+import { customerActivity } from './customer-activity.mjs';
 import { publicPage } from './public-pages.mjs';
 import { activeSubscription, refreshSubscriptionSnapshots } from './billing.mjs';
 import { enqueueLinks, processLink } from './inventory.mjs';
@@ -52,8 +53,9 @@ async function status(db, shop, env) {
     db.prepare(`SELECT COUNT(*) AS links, SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked,
       SUM(CASE WHEN status <> 'preview' THEN 1 ELSE 0 END) AS established
       FROM inventory_links WHERE group_id = ?`).bind(group.id).first(),
-    db.prepare(`SELECT event_type, detail, created_at FROM sync_events WHERE group_id = ?
-      ORDER BY id DESC LIMIT 20`).bind(group.id).all(),
+    db.prepare(`SELECT e.id, e.shop, e.link_id, e.event_type, e.detail, e.created_at, l.sku
+      FROM sync_events e LEFT JOIN inventory_links l ON l.id = e.link_id AND l.group_id = e.group_id
+      WHERE e.group_id = ? ORDER BY e.id DESC LIMIT 150`).bind(group.id).all(),
     db.prepare(`SELECT id, sku, block_reason FROM inventory_links
       WHERE group_id = ? AND status = 'blocked' ORDER BY sku LIMIT 30`).bind(group.id).all(),
     db.prepare(`SELECT l.sku, l.shared_quantity AS target_quantity, m.shop, m.last_quantity
@@ -73,7 +75,7 @@ async function status(db, shop, env) {
     canPair: group.role === 'main' && group.status !== 'active' && Number(counts.established ?? 0) === 0,
     canPreview: group.role === 'main' && group.status !== 'active' && Number(counts.established ?? 0) === 0 &&
       members.results.length >= 2 && members.results.every(member => member.location_id && !member.uninstalled_at),
-    recent: recent.results, blockedLinks: blockedLinks.results, pendingPreview: pendingPreview.results,
+    recent: customerActivity(recent.results, group.main_shop), blockedLinks: blockedLinks.results, pendingPreview: pendingPreview.results,
     inventory: inventory.results,
     inventoryWritesEnabled: shopsAllowedToWrite(env, members.results.map(member => member.shop)) };
 }
