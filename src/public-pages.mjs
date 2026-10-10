@@ -1,0 +1,45 @@
+const contact = '<a href="mailto:nathan@firgelliauto.com">nathan@firgelliauto.com</a>';
+
+function page(title, content) {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>${title} · OnlineSync</title>
+<style>:root{font-family:system-ui,sans-serif;color:#182523;background:#f4f7f5}*{box-sizing:border-box}body{margin:0}main{max-width:820px;margin:auto;padding:48px 24px 64px}nav{display:flex;gap:20px;margin-bottom:40px;font-size:14px}a{color:#136f53}h1{font-size:40px;letter-spacing:-.045em;line-height:1.12;margin:8px 0 16px}h2{font-size:22px;margin:32px 0 12px}p,li{font-size:16px;line-height:1.65;color:#41534c}li{margin:8px 0}.brand{color:#136f53;font-size:13px;font-weight:750;letter-spacing:.15em}.card{background:white;border:1px solid #dce6e0;padding:24px;border-radius:16px;margin:24px 0}.small{font-size:13px;color:#64736d}footer{border-top:1px solid #dce6e0;margin-top:40px;padding-top:20px}</style>
+</head><body><main><nav><strong>OnlineSync</strong><a href="/help">Help</a><a href="/privacy">Privacy</a></nav>
+<div class="brand">FIRGELLIAUTO</div><h1>${title}</h1>${content}
+<footer><p class="small">OnlineSync by Firgelliauto · ${contact}</p></footer></main></body></html>`;
+}
+
+export function publicPage(path) {
+  if (path === '/privacy') return page('Privacy policy', `
+<p class="small">Last updated October 9, 2026</p>
+<p>Firgelliauto operates OnlineSync, an app that synchronizes inventory between Shopify stores you connect. This page describes the information the app processes and how to contact us about it.</p>
+<h2>Information we process</h2>
+<p>OnlineSync processes Shopify store domains and identifiers, inventory locations, product and variant identifiers, product titles, SKUs, inventory tracking settings, and stock quantities. We keep the store connections, selected locations, SKU mappings, stock snapshots, and activity records needed to operate your sync group.</p>
+<p>Shopify provides access and refresh tokens so the app can perform authorized API requests. These tokens are encrypted before storage. We verify Shopify session tokens when you open the app. To check your app subscription, we process your store identifier and subscription status, billing period, and trial end date.</p>
+<p>The app does not request customer profiles, customer addresses, order records, or payment card details. Shopify handles subscription payments. If you email support, we receive the information you include in your message.</p>
+<h2>How we use and share information</h2>
+<p>We use this information to authenticate your store, match inventory by SKU, synchronize selected stock quantities, check subscription access, diagnose errors, and respond to support requests. Connected stores in the same sync group can see each other's store domains, roles, selected locations, and shared inventory preview. Only connect stores you are authorized to manage.</p>
+<p>We use Shopify for app authentication, store APIs, and app billing, and Cloudflare for application hosting, database storage, and queued background work. These providers process information needed to provide their services. Information may be processed outside your country. We do not use app data for advertising or sell it.</p>
+<h2>Retention and deletion</h2>
+<p>Store connections and stock mappings are retained while needed to operate the app. Activity records are removed after 90 days, webhook delivery identifiers after 7 days, and expired pairing codes are cleared automatically. On an authenticated uninstall notification, we pause the affected sync group and remove that store's access and refresh tokens.</p>
+<p>When Shopify sends its store-redaction notification, we delete the store's app records. Removing the main store also removes its sync group; removing another member invalidates the group's inventory mappings and pauses syncing. Infrastructure backups and provider operational records can remain subject to the providers' retention processes. You can contact us to request access to or deletion of information associated with your store.</p>
+<h2>Your choices and contact</h2>
+<p>You can pause synchronization in the app or uninstall OnlineSync through Shopify. Depending on where you live, you may have rights to access, correct, or delete your information. Send privacy questions or requests to ${contact}, including the store domain so we can verify the request. Do not send passwords, API tokens, or customer payment information.</p>
+<p>If our practices change, we will update this page and its date. Material changes will be communicated through the app or an appropriate contact channel.</p>`);
+  if (path === '/help') return page('Connect your stores. Share your stock.', `
+<p>OnlineSync starts with the main store's quantity, then keeps the selected inventory locations aligned when stock changes in a connected store.</p>
+<div class="card"><h2 style="margin-top:0">Get help</h2><p>Email ${contact}. Include your store domain, the SKU involved, the time of the issue, and what you expected to happen. Never send an API token or password.</p></div>
+<h2>Set up a store group</h2><ol>
+<li>Install OnlineSync in the main store and in each additional Shopify store you manage.</li>
+<li>Open the main store's app and create a pairing code. Enter it in the other store's app within 10 minutes. Each code can be used once.</li>
+<li>Choose the inventory location to share in each store. Check that this is the location used for your orders.</li>
+<li>Use the same unique SKU in every store for each product variant. Inventory must be tracked, the product must be physical, and selling when out of stock must be off.</li>
+<li>Prepare the read-only preview in the main store. Review the starting quantities and matches before activation.</li>
+<li>Select the Basic plan in Shopify, then start synchronization. The main store's reviewed quantity supplies the initial shared stock.</li></ol>
+<h2>Quantities and stock changes</h2><p>A stock change in one connected store updates the shared quantity and is copied to the others. Updates run in the background, so a sale in another store may happen before an update arrives. Use a stock buffer if your business cannot tolerate overselling.</p>
+<h2>A SKU needs review</h2><p>If several stores changed before a reconciliation, or a quantity changed after the preview, OnlineSync blocks that SKU rather than guessing. Pause syncing, review the quantities and other inventory apps connected to those stores, and email support for help. Do not run two independent inventory sync systems against the same SKUs.</p>
+<h2>Pause, cancel, or change your plan</h2><p>Pause syncing in the app to stop stock updates. Pausing does not cancel the subscription. Manage your subscription in Shopify; uninstalling the app removes its access to your store. Shopify handles the subscription's billing and cancellation rules.</p>
+<h2>Basic</h2><p>$20 USD per month with a 7-day free trial. The Shopify plan-selection page shows the current subscription terms before approval. Product descriptions, images, prices, and SEO fields are not synchronized by this inventory version.</p>
+<p class="small">OnlineSync is currently being prepared for launch. Inventory propagation and billing are undergoing development-store validation.</p>`);
+  return null;
+}

@@ -21,6 +21,10 @@
   "triggers": { "crons": ["*/5 * * * *", "7 3 * * *"] },
   "vars": {
     "SHOPIFY_API_VERSION": "2026-07",
-    "INVENTORY_WRITES_ENABLED": "false"
+    "SHOPIFY_PARTNER_ORG_ID": "1882822",
+    "SHOPIFY_APP_GID": "gid://shopify/App/433757585409",
+    "SHOPIFY_APP_HANDLE": "onlinesync-3",
+    "INVENTORY_WRITES_ENABLED": "true",
+    "INVENTORY_WRITE_ALLOWED_SHOPS": "onlinesync-pilot-main.myshopify.com,onlinesync-pilot-second.myshopify.com"
   }
 }

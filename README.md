@@ -23,9 +23,11 @@ The new public app's client ID and client secret are stored in ignored `.dev.var
 
 The account owner completed Shopify App Store registration on October 9, 2026, and the Partner Dashboard confirms registration succeeded. The draft listing's primary language is English. The inventory app declares no customer-data use; it requests no customer or order scopes. **Basic: USD 20 monthly with a 7-day free trial** is saved in Shopify App Pricing with handle `basic`, redirect `/`, and free development-store testing enabled. There are no usage charges. The invoice name and internal plan handle cannot be changed after creation; the pricing and trial inputs remain editable.
 
-The English plan display name is still pending. Shopify validates the entire listing before saving localized plan descriptions, so a partial save was rejected due to missing app icon, category, media/screenshots, public support email, privacy URL, and other listing content. The listing editor currently contains an unsaved `Basic` display name. Do not treat the paid plan as merchant-ready yet. Partner API credentials and development-store subscription tests also remain pending; no merchant charges have been approved.
+The English listing draft is saved, including the Basic display name, category, introduction, feature copy, screenshots, support email, and public help/privacy URLs. Shopify currently reports two remaining draft issues: its listing icon has not picked up the icon saved in the Dev Dashboard, and the required screencast URL is empty. The draft has not been submitted for review.
 
-OnlineSync's approved business name is **Firgelliauto** and its public support email is **nathan@firgelliauto.com**. These details are recorded in `docs/listing-details.json` for app-specific listing and support/privacy content. The support email is entered in Shopify's listing editor but remains unsaved until the rest of the listing passes validation. The shared Partner organization settings have not been renamed.
+OnlineSync's business name is **Firgelliauto** and its public support email is **nathan@firgelliauto.com**. The shared Partner organization settings have not been renamed. `/help` and `/privacy` are public pages hosted by the separate OnlineSync Worker.
+
+The owner approved a new Partner API client, **OnlineSync billing checks** (39117), with only Manage apps permission. Its token is in ignored local configuration and the online-sync Worker secret. Shopify scopes that permission across the Partner organization; this app uses only its own app GID in subscription queries. A real Partner API query confirmed the main development store's active Basic test subscription. The hosted Shopify approval page explicitly stated that this test plan is free and will not be billed.
 
 Two new Basic development stores were created solely for the OnlineSync pilot, with Shopify test-data generation selected:
 
@@ -34,7 +36,7 @@ Two new Basic development stores were created solely for the OnlineSync pilot, w
 
 These are separate from the existing FirgelliTest store and from all production stores. OnlineSync is installed through Shopify CLI development previews on both stores (`app dev --no-update` retained the hosted Worker URL). The previews remain after stopping CLI; use `app dev clean` to restore the released app configuration. Both stores are authenticated and paired, with Main as the main store and `Shop location` selected on each. The app's Shopify admin handle is `onlinesync-3`.
 
-The sample Minimal Snowboard was assigned `ONLINESYNC-PILOT-001` on both stores. The first successful read-only preview found that SKU and Shopify's sample `sku-managed-1`, each showing main 50 and other 50. No inventory changed. Live installation/token exchange, location discovery, pairing, and catalog GraphQL reads are now verified. Billing setup and actual inventory propagation, including sales and retries, remain pending. The Worker write switch remains off.
+The sample Minimal Snowboard was assigned `ONLINESYNC-PILOT-001` on both stores. The first successful read-only preview found that SKU and Shopify's sample `sku-managed-1`, each showing main 50 and other 50. Live installation/token exchange, location discovery, pairing, catalog reads, subscription approval, and Partner API checks are verified. The live pilot then copied the second store from 43 to the main baseline of 50. A child adjustment to 47 reached the main store; a main adjustment to 45 reached the child. Shopify webhook delivery and echoed writes were verified. Actual orders, retries, and conflict recovery still require validation.
 
 Implemented:
 
@@ -44,10 +46,10 @@ Implemented:
 - Unique-SKU matching for tracked, physical products that do not continue selling out of stock.
 - A main-store initial quantity, followed by changes from either store. Ambiguous concurrent changes block that SKU.
 - Idempotent Shopify inventory writes with a current-quantity check, webhook deduplication, queue retries, a five-minute sweep, and daily reconciliation.
-- Shopify App Pricing subscription checks through the Partner API. Starting sync requires an active subscription and an explicit deployment write switch.
+- Shopify App Pricing subscription checks through the Partner API. Starting sync requires an active subscription, an explicit deployment write switch, and a permitted store group.
 - Authenticated uninstall and mandatory privacy webhook handlers.
 
-This is not ready for App Store submission yet. The next work is an end-to-end pilot on two development stores, conflict-resolution controls, support/privacy pages, product-content sync rules, operational monitoring, and Shopify review. The live switch should only be enabled after the pilot is reviewed.
+This is not ready for App Store submission yet. The next work is an end-to-end pilot on two development stores, conflict-resolution controls, product-content sync rules, operational monitoring, and Shopify review. The write switch is enabled only for the two named development stores through INVENTORY_WRITE_ALLOWED_SHOPS. An empty allowlist denies all writes; public merchant writes require an explicit wildcard and a separate launch decision.
 
 ## How a merchant uses it
 
@@ -89,7 +91,7 @@ The **new public Shopify app** is linked in `shopify.app.toml`. Do not reuse the
 
 The Cloudflare D1 database and Queue are already created and bound in `wrangler.jsonc`. Apply future migrations remotely only after confirming the target account and OnlineSync database. The app's Cloudflare secrets are listed in `.env.example`; put local values in ignored `.dev.vars` and hosted values in the `online-sync` Worker secrets. Its 32-byte token encryption key has already been generated. Preserve that key when adding Shopify credentials. Never commit credentials or paste them into a public issue.
 
-Configure a monthly plan in Shopify App Pricing and provide the Partner organization ID, Partner API access token, public app GID, and app handle as Worker secrets. The billing check fails closed: without these values, starting sync is unavailable. Keep `INVENTORY_WRITES_ENABLED=false` while testing installs, pairing, locations, preview, webhook signatures, billing, and subscription redirects. For a development-store pilot, turn it on only in the new OnlineSync Worker after reviewing the specific test stores and initial stock preview. This switch has no effect on the existing syncApp Worker.
+Configure a monthly plan in Shopify App Pricing and provide the Partner organization ID, Partner API access token, public app GID, and app handle as Worker secrets. The billing check fails closed: without these values, starting sync is unavailable. Keep `INVENTORY_WRITES_ENABLED=false` for read-only setup. The current write pilot is restricted to the two named development stores by `INVENTORY_WRITE_ALLOWED_SHOPS`. For a development-store pilot, turn it on only in the new OnlineSync Worker after reviewing the specific test stores and initial stock preview. This switch has no effect on the existing syncApp Worker.
 
 ## Verification and remaining work
 

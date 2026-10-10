@@ -1,6 +1,7 @@
 import { adminGraphql } from './shopify.mjs';
 import { activeSubscription } from './billing.mjs';
 import { planSharedQuantity } from './sync-plan.mjs';
+import { shopsAllowedToWrite } from './write-policy.mjs';
 
 export async function readQuantity(db, member, sku, env) {
   const data = await adminGraphql(db, member.shop, env, `query Quantity($item: ID!, $location: ID!) {
@@ -23,7 +24,7 @@ export async function readQuantity(db, member, sku, env) {
 }
 
 export async function writeQuantity(db, member, write, env) {
-  if (env.INVENTORY_WRITES_ENABLED !== 'true') throw new Error('Inventory writes are disabled');
+  if (!shopsAllowedToWrite(env, [member.shop])) throw new Error('Inventory writes are disabled for this store');
   const data = await adminGraphql(db, member.shop, env, `mutation SetQuantity(
     $input: InventorySetQuantitiesInput!, $key: String!) {
     inventorySetQuantities(input: $input) @idempotent(key: $key) {
@@ -150,6 +151,12 @@ export async function processLink(env, linkId) {
     const members = (await db.prepare(`SELECT m.*, s.uninstalled_at FROM inventory_members m
       JOIN stores s ON s.shop = m.shop WHERE m.link_id = ? ORDER BY m.shop`)
       .bind(linkId).all()).results;
+    if (!shopsAllowedToWrite(env, members.map(member => member.shop))) {
+      await db.prepare("UPDATE sync_groups SET status = 'paused' WHERE id = ?")
+        .bind(link.group_id).run();
+      await log(db, link, null, 'paused', 'Inventory writes are restricted to the configured pilot stores');
+      return { retry: false };
+    }
     if (members.length < 2 || members.some(m => m.uninstalled_at)) {
       await block(db, link, 'A connected store was uninstalled');
       return { retry: false };

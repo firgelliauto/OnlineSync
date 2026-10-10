@@ -3,8 +3,10 @@ import { exchangeOfflineToken, listLocations, saveToken } from './shopify.mjs';
 import { listEligibleVariants, matchingCatalogs } from './catalog.mjs';
 import { createPairingCode, redeemPairingCode } from './pairing.mjs';
 import { appPage } from './app-page.mjs';
+import { publicPage } from './public-pages.mjs';
 import { activeSubscription } from './billing.mjs';
 import { enqueueLinks, processLink } from './inventory.mjs';
+import { shopsAllowedToWrite } from './write-policy.mjs';
 
 const json = (data, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
 const invalidSession = () => new Response(JSON.stringify({ error: 'Invalid Shopify session' }), {
@@ -55,7 +57,7 @@ async function status(db, shop, env) {
   return { currentShop: shop, group: { id: group.id, mainShop: group.main_shop, role: group.role,
       status: group.status, billing },
     stores: members.results, links: Number(counts.links), blocked: Number(counts.blocked ?? 0),
-    recent: recent.results, inventoryWritesEnabled: env.INVENTORY_WRITES_ENABLED === 'true' };
+    recent: recent.results, inventoryWritesEnabled: shopsAllowedToWrite(env, members.results.map(member => member.shop)) };
 }
 
 async function preview(db, group, env) {
@@ -126,6 +128,9 @@ async function control(db, group, env, input) {
     .bind(group.id).all()).results;
   if (stores.length < 2 || stores.some(s => !s.location_id || s.uninstalled_at)) {
     return json({ error: 'Connect and configure at least two installed stores' }, 409);
+  }
+  if (!shopsAllowedToWrite(env, stores.map(store => store.shop))) {
+    return json({ error: 'Inventory writes are restricted to the configured pilot stores' }, 409);
   }
   const links = (await db.prepare(`SELECT id FROM inventory_links
     WHERE group_id = ? AND status IN ('preview', 'active')`).bind(group.id).all()).results;
@@ -294,6 +299,14 @@ async function webhook(request, env, path) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    const publicHtml = publicPage(url.pathname);
+    if (publicHtml && (request.method === 'GET' || request.method === 'HEAD')) {
+      return new Response(request.method === 'HEAD' ? null : publicHtml, { headers: {
+        'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=300',
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors https://admin.shopify.com https://*.myshopify.com; base-uri 'none'; form-action 'none'"
+      } });
+    }
     if (url.pathname === '/health') return json({ status: 'ok',
       inventoryWritesEnabled: env.INVENTORY_WRITES_ENABLED === 'true' });
     if (url.pathname === '/' && request.method === 'GET') {

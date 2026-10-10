@@ -87,12 +87,24 @@ async function setup(main = 10, child = 10, initialized = 1) {
     throw new Error(`Unexpected Shopify request: ${query}`);
   };
   const env = { DB: db, TOKEN_ENCRYPTION_KEY: key, INVENTORY_WRITES_ENABLED: 'true',
+    INVENTORY_WRITE_ALLOWED_SHOPS: 'main.myshopify.com,child.myshopify.com',
     SHOPIFY_API_VERSION: '2026-07', SHOPIFY_PARTNER_ORG_ID: 'org',
     SHOPIFY_PARTNER_API_ACCESS_TOKEN: 'partner-token', SHOPIFY_APP_GID: 'app',
     SHOPIFY_APP_HANDLE: 'online-sync' };
   return { sqlite, db, env, quantities, writes,
     close() { globalThis.fetch = originalFetch; sqlite.close(); } };
 }
+
+test('a group containing an unapproved store is paused without inventory writes', async () => {
+  const state = await setup(10, 8, 0);
+  try {
+    state.env.INVENTORY_WRITE_ALLOWED_SHOPS = 'main.myshopify.com';
+    assert.deepEqual(await processLink(state.env, 'link'), { retry: false });
+    assert.equal(state.sqlite.prepare("SELECT status FROM sync_groups WHERE id='group'").get().status, 'paused');
+    assert.equal(state.writes.length, 0);
+    assert.equal(state.quantities['child.myshopify.com'], 8);
+  } finally { state.close(); }
+});
 
 test('initial main quantity copies to child, then sales in either store propagate once', async () => {
   const state = await setup(10, 8, 0);
