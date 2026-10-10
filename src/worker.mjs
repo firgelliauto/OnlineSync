@@ -7,6 +7,7 @@ import { publicPage } from './public-pages.mjs';
 import { activeSubscription } from './billing.mjs';
 import { enqueueLinks, processLink } from './inventory.mjs';
 import { shopsAllowedToWrite } from './write-policy.mjs';
+import { prepareConflictPreview } from './conflicts.mjs';
 
 const json = (data, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
 const invalidSession = () => new Response(JSON.stringify({ error: 'Invalid Shopify session' }), {
@@ -42,14 +43,24 @@ async function bootstrap(db, shop, token, env) {
 async function status(db, shop, env) {
   const group = await currentGroup(db, shop);
   if (!group) throw new Error('No sync group found');
-  const [members, counts, recent] = await Promise.all([
+  const [members, counts, recent, blockedLinks, pendingPreview, inventory] = await Promise.all([
     db.prepare(`SELECT gs.shop, gs.role, gs.location_id, s.uninstalled_at FROM group_stores gs
       JOIN stores s ON s.shop = gs.shop WHERE gs.group_id = ? ORDER BY gs.role DESC, gs.shop`)
       .bind(group.id).all(),
-    db.prepare(`SELECT COUNT(*) AS links, SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked
+    db.prepare(`SELECT COUNT(*) AS links, SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked,
+      SUM(CASE WHEN status <> 'preview' THEN 1 ELSE 0 END) AS established
       FROM inventory_links WHERE group_id = ?`).bind(group.id).first(),
     db.prepare(`SELECT event_type, detail, created_at FROM sync_events WHERE group_id = ?
-      ORDER BY id DESC LIMIT 20`).bind(group.id).all()
+      ORDER BY id DESC LIMIT 20`).bind(group.id).all(),
+    db.prepare(`SELECT id, sku, block_reason FROM inventory_links
+      WHERE group_id = ? AND status = 'blocked' ORDER BY sku LIMIT 30`).bind(group.id).all(),
+    db.prepare(`SELECT l.sku, l.shared_quantity AS target_quantity, m.shop, m.last_quantity
+      FROM inventory_links l JOIN inventory_members m ON m.link_id = l.id
+      WHERE l.group_id = ? AND l.status = 'preview' ORDER BY l.sku, m.shop LIMIT 100`)
+      .bind(group.id).all(),
+    db.prepare(`SELECT l.sku, l.shared_quantity, l.status, l.initialized,
+      EXISTS (SELECT 1 FROM sync_writes w WHERE w.link_id = l.id) AS pending_write
+      FROM inventory_links l WHERE l.group_id = ? ORDER BY l.sku LIMIT 30`).bind(group.id).all()
   ]);
   let billing;
   try { billing = await activeSubscription(db, group.main_shop, env); }
@@ -57,7 +68,10 @@ async function status(db, shop, env) {
   return { currentShop: shop, group: { id: group.id, mainShop: group.main_shop, role: group.role,
       status: group.status, billing },
     stores: members.results, links: Number(counts.links), blocked: Number(counts.blocked ?? 0),
-    recent: recent.results, inventoryWritesEnabled: shopsAllowedToWrite(env, members.results.map(member => member.shop)) };
+    canPair: group.role === 'main' && group.status !== 'active' && Number(counts.established ?? 0) === 0,
+    recent: recent.results, blockedLinks: blockedLinks.results, pendingPreview: pendingPreview.results,
+    inventory: inventory.results,
+    inventoryWritesEnabled: shopsAllowedToWrite(env, members.results.map(member => member.shop)) };
 }
 
 async function preview(db, group, env) {
@@ -196,6 +210,11 @@ async function merchantApi(request, env, path) {
     }
     if (path === '/api/pairing-code' && request.method === 'POST') {
       if (group.role !== 'main') return json({ error: 'Only the main store can create a code' }, 403);
+      const linked = await db.prepare(`SELECT 1 AS found FROM inventory_links
+        WHERE group_id = ? AND status <> 'preview' LIMIT 1`).bind(group.id).first();
+      if (group.status === 'active' || linked) {
+        return json({ error: 'Connect all stores before starting the initial inventory sync' }, 409);
+      }
       return json(await createPairingCode(db, group.id));
     }
     if (path === '/api/join' && request.method === 'POST') {
@@ -217,6 +236,13 @@ async function merchantApi(request, env, path) {
       return json(await status(db, user.shop, env));
     }
     if (path === '/api/preview' && request.method === 'POST') return preview(db, group, env);
+    if (path === '/api/conflict-preview' && request.method === 'POST') {
+      const input = await request.json();
+      if (typeof input.linkId !== 'string' || input.linkId.length > 100) {
+        return json({ error: 'Choose a blocked SKU to review' }, 400);
+      }
+      return json(await prepareConflictPreview(db, group, input.linkId, env));
+    }
     if (path === '/api/control' && request.method === 'POST') {
       return control(db, group, env, await request.json());
     }
@@ -224,7 +250,7 @@ async function merchantApi(request, env, path) {
   } catch (error) {
     console.error('Merchant API error', error);
     if (error instanceof SyntaxError) return json({ error: 'Invalid JSON' }, 400);
-    return json({ error: error.message || 'Request failed' }, 500);
+    return json({ error: error.message || 'Request failed' }, error.status || 500);
   }
 }
 

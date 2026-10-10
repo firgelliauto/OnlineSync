@@ -36,7 +36,7 @@ Two new Basic development stores were created solely for the OnlineSync pilot, w
 
 These are separate from the existing FirgelliTest store and from all production stores. OnlineSync is installed through Shopify CLI development previews on both stores (`app dev --no-update` retained the hosted Worker URL). The previews remain after stopping CLI; use `app dev clean` to restore the released app configuration. Both stores are authenticated and paired, with Main as the main store and `Shop location` selected on each. The app's Shopify admin handle is `onlinesync-3`.
 
-The sample Minimal Snowboard was assigned `ONLINESYNC-PILOT-001` on both stores. The first successful read-only preview found that SKU and Shopify's sample `sku-managed-1`, each showing main 50 and other 50. Live installation/token exchange, location discovery, pairing, catalog reads, subscription approval, and Partner API checks are verified. The live pilot then copied the second store from 43 to the main baseline of 50. A child adjustment to 47 reached the main store; a main adjustment to 45 reached the child. Shopify webhook delivery and echoed writes were verified. Actual orders, retries, and conflict recovery still require validation.
+The sample Minimal Snowboard was assigned `ONLINESYNC-PILOT-001` on both stores. The first successful read-only preview found that SKU and Shopify's sample `sku-managed-1`, each showing main 50 and other 50. Live installation/token exchange, location discovery, pairing, catalog reads, subscription approval, and Partner API checks are verified. The live pilot then copied the second store from 43 to the main baseline of 50. A child adjustment to 47 reached the main store; a main adjustment to 45 reached the child. Shopify webhook delivery and echoed writes were verified. Free development-store orders were then created in both directions: a main-store sale moved both stores from 45 to 44, and a second-store sale moved both from 44 to 43. No payments were collected. Pause kept quantities independent; resuming after changes in both stores blocked the SKU without a write. A read-only recovery preview staged main 41 and second 42 with a proposed shared baseline of 41, survived a page reload, and left stock unchanged. Resuming applied the baseline and both stores reached 41. Retry interruption, uninstall/reinstall, catalog scale, and full review-video capture remain pending.
 
 Implemented:
 
@@ -44,12 +44,13 @@ Implemented:
 - Expiring offline token exchange, encrypted storage, refresh rotation, and a per-store refresh lock.
 - Merchant store groups, one-use pairing codes, location selection, and a read-only SKU preview.
 - Unique-SKU matching for tracked, physical products that do not continue selling out of stock.
-- A main-store initial quantity, followed by changes from either store. Ambiguous concurrent changes block that SKU.
+- A main-store initial quantity, followed by changes from either store. Ambiguous concurrent changes block that SKU. The main store can pause, stage a fresh recovery preview, and resume with a corrected main-store baseline. Recovery checks the job lock and group membership; changed quantities block again rather than overwriting stale stock.
+- Stock reads recheck SKU uniqueness, tracking, physical shipping, and out-of-stock selling before writes. Pairing cannot add a new store to an established inventory group.
 - Idempotent Shopify inventory writes with a current-quantity check, webhook deduplication, queue retries, a five-minute sweep, and daily reconciliation.
 - Shopify App Pricing subscription checks through the Partner API. Starting sync requires an active subscription, an explicit deployment write switch, and a permitted store group.
 - Authenticated uninstall and mandatory privacy webhook handlers.
 
-This is not ready for App Store submission yet. The next work is an end-to-end pilot on two development stores, conflict-resolution controls, product-content sync rules, operational monitoring, and Shopify review. The write switch is enabled only for the two named development stores through INVENTORY_WRITE_ALLOWED_SHOPS. An empty allowlist denies all writes; public merchant writes require an explicit wildcard and a separate launch decision.
+This is not ready for App Store submission yet. The next work is an end-to-end pilot on two development stores, product-content sync rules, operational monitoring, and Shopify review. The write switch is enabled only for the two named development stores through INVENTORY_WRITE_ALLOWED_SHOPS. An empty allowlist denies all writes; public merchant writes require an explicit wildcard and a separate launch decision.
 
 ## How a merchant uses it
 
@@ -72,6 +73,8 @@ Even with webhooks and queues, sales can happen in separate stores before the ne
 - `src/pairing.mjs`: short-lived store pairing.
 - `src/billing.mjs`: Shopify App Pricing active-subscription check.
 - `src/inventory.mjs` and `src/sync-plan.mjs`: shared quantity planning and guarded writes.
+- `src/conflicts.mjs`: paused, read-only recovery previews for blocked SKUs.
+- `src/write-policy.mjs`: deployment switch and pilot shop allowlist.
 - `migrations/`: D1 schema for store groups, catalog links, activity, jobs, and pending writes.
 
 Cloudflare Workers serves the app and receives webhooks. D1 holds merchant configuration and sync state. Cloudflare Queues runs stock work; scheduled Worker events recover missed jobs and reconcile daily. Shopify hosts storefronts and bills merchants for the app.
@@ -95,7 +98,7 @@ Configure a monthly plan in Shopify App Pricing and provide the Partner organiza
 
 ## Verification and remaining work
 
-`npm test` covers Shopify token and webhook verification, token encryption, one-use pairing, main and child sales, initial copy, webhook echoes, and simultaneous-change blocking. Database migrations and the Worker deployment have succeeded. The hosted health endpoint has been checked with inventory writes disabled. Shopify installation, billing, and inventory integration still require the new public app and development stores.
+`npm test` currently passes 22 tests covering Shopify token and webhook verification, token encryption, one-use pairing, initial copy, main and child sales, echoed writes, simultaneous-change blocking, recovery previews, changed inventory policies, pilot isolation, deleted queue jobs, uninstall, and store redaction. Database migrations and the Worker deployment have succeeded. The hosted health endpoint has been checked with inventory writes disabled. Live installation, billing approval, two-store sale propagation, pause, conflict detection, and recovery have been verified on the named development stores. Public merchant writes remain disabled by the pilot allowlist.
 
 The next pilot should test install/uninstall/reinstall, subscription changes, token refresh, HMAC delivery, catalog sizes and rate limits, initial-copy interruption, simultaneous orders, inventory write retries, pause/resume, and privacy webhooks on development stores. Product descriptions, images, prices, and SEO fields should receive field-level sync rules and previews before being added to the live write path.
 
@@ -106,3 +109,9 @@ The next pilot should test install/uninstall/reinstall, subscription changes, to
 - [Shopify App Pricing](https://shopify.dev/docs/apps/launch/billing/shopify-app-pricing)
 - [Shopify inventory quantity mutation](https://shopify.dev/docs/api/admin-graphql/latest/mutations/inventorySetQuantities)
 - [Mandatory privacy webhooks](https://shopify.dev/docs/apps/build/compliance/privacy-law-compliance)
+
+## Restricted pilot inventory check
+
+`node scripts/pilot-inventory.mjs main` (or `second`) reads the real stock for ONLINESYNC-PILOT-001. `--set quantity` performs a guarded test adjustment of at most five units. The helper accepts only the two named development-store domains, checks the exact OnlineSync database ID, honors the write policy, and reads encrypted tokens without displaying them. It cannot accept another store or database. Reopen the app first if its access token needs refreshing.
+
+Worker console diagnostics are enabled for OnlineSync. Invocation logging is disabled to avoid retaining embedded app URLs containing short-lived session tokens. The dashboard shows the first 30 matched SKUs, their recorded shared quantities, pending updates, and review state. Large-catalog browsing, interrupted-write retries, uninstall/reinstall integration, and review-video capture remain launch work.

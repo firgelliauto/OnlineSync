@@ -21,15 +21,17 @@ ul{padding-left:20px;color:#334b43}li{margin:6px 0}.small{font-size:12px;color:#
 <div id="message" class="notice">Connecting to Shopify…</div>
 <div class="cards"><div class="card"><div class="label">Sync state</div><div class="value" id="state">—</div></div><div class="card"><div class="label">Connected stores</div><div class="value" id="storesCount">—</div></div><div class="card"><div class="label">Matching SKUs</div><div class="value" id="links">—</div></div><div class="card"><div class="label">Needs review</div><div class="value" id="blocked">—</div></div></div>
 <section class="panel"><h2>Your store group</h2><p id="mainStore">Loading…</p><ul id="stores"></ul><p class="small">The main store supplies the starting quantity. Later sales in either store will reduce the same shared stock pool.</p></section>
+<section class="panel"><h2>Shared stock</h2><p class="small">The first 30 matched SKUs and their last processed quantities. Refresh to check recent changes.</p><div id="inventory" class="sample"></div></section>
 <section class="panel"><h2>Choose this store's inventory location</h2><p>Choose the location whose available quantity should be shared.</p><div class="row"><select id="location"><option value="">Loading locations…</option></select><button id="saveLocation">Save location</button></div></section>
 <section class="panel" id="pairPanel"><h2>Connect another store</h2><p>Install OnlineSync on the other store. Create a code here, then enter it in that store's app.</p><div class="row"><button id="makeCode">Create pairing code</button><code id="pairCode" hidden></code></div><div class="row"><input id="joinCode" placeholder="Code from main store" maxlength="24" autocomplete="off"><button id="join">Join group</button></div><p class="small">Codes expire after 10 minutes and can be used once.</p></section>
 <section class="panel"><h2>Read-only stock preview</h2><p>Find unique, tracked physical SKUs present at every selected location. This uses the main store quantity as the proposed starting stock.</p><div class="row"><button id="preview">Prepare preview</button></div><p id="previewResult" class="small"></p><div class="sample" id="sample"></div></section>
 <section class="panel"><h2>Subscription and sync control</h2><p id="billing">Checking subscription…</p><a id="plans" hidden target="_top" rel="noopener">Choose a plan in Shopify</a><div class="row"><button id="start" disabled>Start syncing</button><button id="pause" class="secondary" disabled>Pause syncing</button></div><p class="small">Starting copies the main store's previewed quantities, then sales or stock changes in either store update the shared quantity. Changed or ambiguous SKUs pause for review.</p></section>
 <section class="panel"><h2>Recent activity</h2><ul id="activity"></ul></section>
+<section class="panel" id="reviewPanel" hidden><h2>Inventory needs review</h2><p>Pause syncing, check sales and stock changes in every store, and correct the main store's quantity if needed. Prepare a new preview below to use that main quantity as the starting stock. Resuming will copy it to the other stores.</p><div id="reviewLinks"></div><div id="reviewPreview" class="sample"></div></section>
 <footer class="small">OnlineSync by Firgelliauto · <a href="/help" target="_blank" rel="noopener">Help</a> · <a href="/privacy" target="_blank" rel="noopener">Privacy</a></footer>
 </main><script>
 const $=id=>document.getElementById(id);let current=null;
-async function api(path,method='GET',body){const token=await shopify.idToken();const response=await fetch(path,{method,headers:{Authorization:'Bearer '+token,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});const result=await response.json();if(!response.ok)throw new Error(result.error||'Request failed');return result}
+async function api(path,method='GET',body){for(let attempt=0;attempt<2;attempt++){const token=await shopify.idToken();const response=await fetch(path,{method,headers:{Authorization:'Bearer '+token,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});if(response.status===401&&attempt===0)continue;const result=await response.json();if(!response.ok)throw new Error(response.status===401?'Your Shopify session expired. Reopen OnlineSync and try again.':result.error||'Request failed');return result}}
 function message(text,kind='notice'){const el=$('message');el.textContent=text;el.className=kind}
 function render(data){
   current=data;
@@ -38,9 +40,12 @@ function render(data){
   $('links').textContent=data.links;
   $('blocked').textContent=data.blocked;
   $('mainStore').textContent='Main store: '+data.group.mainShop;
+  const inventory=$('inventory');inventory.replaceChildren();
+  for(const item of data.inventory||[]){const row=document.createElement('div');const sku=document.createElement('strong');sku.textContent=item.sku;const detail=document.createElement('span');detail.textContent=item.shared_quantity+' · '+(item.status==='preview'?'Proposed baseline':item.status==='blocked'?'Needs review':!item.initialized?'Initial copy pending':data.group.status==='paused'?'Paused':item.pending_write?'Updating':'Active');row.append(sku,detail);inventory.append(row)}
+  if(!data.inventory?.length){const row=document.createElement('p');row.textContent='Prepare a stock preview to see matching SKUs.';inventory.append(row)}
   const list=$('stores');list.replaceChildren();
   for(const s of data.stores){const li=document.createElement('li');li.textContent=s.shop+' — '+s.role+(s.location_id?' · location selected':' · choose location')+(s.uninstalled_at?' · app uninstalled':'');list.append(li)}
-  $('makeCode').disabled=data.group.role!=='main';
+  $('makeCode').disabled=!data.canPair;
   $('join').disabled=data.group.role!=='main'||data.stores.length!==1;
   $('preview').disabled=data.group.role!=='main'||data.stores.length<2||data.stores.some(x=>!x.location_id)||data.group.status==='active';
   $('pairPanel').querySelector('p').textContent=data.group.role==='main'?'Install OnlineSync on the other store. Create a code here, then enter it in that store’s app.':'Enter the code shown in your main store’s app.';
@@ -50,11 +55,17 @@ function render(data){
   $('start').disabled=data.group.role!=='main'||data.group.status==='active'||!data.inventoryWritesEnabled||!billing.active||!data.links||data.stores.some(x=>!x.location_id||x.uninstalled_at);
   $('pause').disabled=data.group.role!=='main'||data.group.status!=='active';
   $('start').textContent=data.group.status==='paused'?'Resume syncing':'Start syncing';
+  $('reviewPanel').hidden=!data.blocked&&!data.pendingPreview?.length;
+  const review=$('reviewLinks');review.replaceChildren();
+  for(const link of data.blockedLinks||[]){const row=document.createElement('div');row.className='row';const label=document.createElement('p');label.textContent=link.sku+' · '+link.block_reason;const button=document.createElement('button');button.textContent='Prepare new preview for '+link.sku;button.disabled=data.group.role!=='main'||data.group.status!=='paused';button.onclick=()=>reviewConflict(link.id,button);row.append(label,button);review.append(row)}
+  const reviewed=$('reviewPreview');reviewed.replaceChildren();
+  for(const item of data.pendingPreview||[]){const row=document.createElement('div');row.textContent=item.sku+' · '+item.shop+' · '+item.last_quantity+' → '+item.target_quantity;reviewed.append(row)}
   const activity=$('activity');activity.replaceChildren();
   for(const event of data.recent){const li=document.createElement('li');li.textContent=event.created_at+' · '+event.detail;activity.append(li)}
   if(!data.recent.length){const li=document.createElement('li');li.textContent='No activity yet';activity.append(li)}
 }
 async function load(){try{const data=await api('/api/bootstrap','POST');render(data);const loc=await api('/api/locations');const select=$('location');select.replaceChildren();for(const l of loc.locations){const option=document.createElement('option');option.value=l.id;option.textContent=l.name+(l.isActive?'':' (inactive)');option.disabled=!l.isActive;option.selected=data.stores.find(s=>s.shop===data.currentShop)?.location_id===l.id;select.append(option)}if(!select.value&&loc.locations.length)select.value=loc.locations.find(l=>l.isActive)?.id||'';message('Connected. Choose locations and review the matching catalog.','ok')}catch(e){message(e.message,'error')}}
+async function reviewConflict(linkId,button){button.disabled=true;try{const result=await api('/api/conflict-preview','POST',{linkId});const preview=$('reviewPreview');preview.replaceChildren();for(const store of result.stores){const row=document.createElement('div');row.textContent=result.sku+' · '+store.shop+' · '+store.quantity+' → '+store.targetQuantity;preview.append(row)}render(await api('/api/status'));$('reviewPanel').hidden=false;message('New preview prepared. No inventory changed. Review the quantities, then resume syncing to apply the main-store baseline.','notice')}catch(e){button.disabled=false;message(e.message,'error')}}
 $('refresh').onclick=load;
 $('saveLocation').onclick=async()=>{try{render(await api('/api/location','POST',{locationId:$('location').value}));message('Location saved.','ok')}catch(e){message(e.message,'error')}};
 $('makeCode').onclick=async()=>{try{const result=await api('/api/pairing-code','POST');$('pairCode').textContent=result.code;$('pairCode').hidden=false;message('Enter this code in the other store before it expires.','ok')}catch(e){message(e.message,'error')}};

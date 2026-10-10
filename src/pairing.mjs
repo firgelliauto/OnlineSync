@@ -25,6 +25,10 @@ export async function redeemPairingCode(db, shop, oldGroupId, code) {
       WHERE shop = ? AND group_id = ? AND EXISTS (
         SELECT 1 FROM pairing_codes WHERE code_hash = ? AND used_at IS NULL
           AND expires_at > ? AND group_id <> ?
+          AND EXISTS (SELECT 1 FROM sync_groups g WHERE g.id = pairing_codes.group_id
+            AND g.status IN ('setup', 'paused'))
+          AND NOT EXISTS (SELECT 1 FROM inventory_links l WHERE l.group_id = pairing_codes.group_id
+            AND l.status <> 'preview')
       )`).bind(codeHash, now, shop, oldGroupId, codeHash, now, oldGroupId),
     db.prepare(`UPDATE pairing_codes SET used_at = CURRENT_TIMESTAMP
       WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?

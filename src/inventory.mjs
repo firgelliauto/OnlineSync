@@ -5,12 +5,16 @@ import { shopsAllowedToWrite } from './write-policy.mjs';
 
 export async function readQuantity(db, member, sku, env) {
   const data = await adminGraphql(db, member.shop, env, `query Quantity($item: ID!, $location: ID!) {
-    inventoryItem(id: $item) { sku tracked inventoryLevel(locationId: $location) {
+    inventoryItem(id: $item) { sku tracked requiresShipping duplicateSkuCount
+      variants(first: 2) { nodes { inventoryPolicy } pageInfo { hasNextPage } }
+      inventoryLevel(locationId: $location) {
       quantities(names: ["available"]) { name quantity } } }
   }`, { item: member.inventory_item_id, location: member.location_id });
   const item = data.inventoryItem;
-  if (!item || item.sku !== sku || !item.tracked) {
-    const error = new Error(`${member.shop}: SKU or inventory tracking changed`);
+  if (!item || item.sku?.trim() !== sku || !item.tracked || !item.requiresShipping ||
+      item.duplicateSkuCount !== 0 || !item.variants?.nodes?.length ||
+      item.variants.pageInfo?.hasNextPage || item.variants.nodes.some(variant => variant.inventoryPolicy !== 'DENY')) {
+    const error = new Error(`${member.shop}: SKU uniqueness, tracking, shipping, or out-of-stock selling changed`);
     error.fatal = true;
     throw error;
   }
@@ -67,6 +71,7 @@ async function processWrites(db, link, members, env) {
     const member = members.find(x => x.shop === write.shop);
     if (!member) { await block(db, link, 'Connected store disappeared'); return; }
     try {
+      await readQuantity(db, member, link.sku, env);
       await writeQuantity(db, member, write, env);
     } catch (error) {
       if (error.codes?.includes('CHANGE_FROM_QUANTITY_STALE')) {
@@ -129,7 +134,10 @@ export async function processLink(env, linkId) {
   const claim = await db.prepare(`UPDATE sync_jobs SET lock_owner = ?, lock_until = ?,
     dirty = 0, updated_at = CURRENT_TIMESTAMP WHERE link_id = ?
     AND (lock_owner IS NULL OR lock_until <= ?)`).bind(owner, now + 600, linkId, now).run();
-  if (claim.meta.changes !== 1) return { retry: true, delaySeconds: 5 };
+  if (claim.meta.changes !== 1) {
+    const job = await db.prepare('SELECT link_id FROM sync_jobs WHERE link_id = ?').bind(linkId).first();
+    return job ? { retry: true, delaySeconds: 5 } : { retry: false };
+  }
   try {
     const link = await db.prepare(`SELECT l.*, g.main_shop, g.status AS group_status
       FROM inventory_links l JOIN sync_groups g ON g.id = l.group_id WHERE l.id = ?`)

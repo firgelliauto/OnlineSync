@@ -38,6 +38,9 @@ test('pairing moves an installed child store to the main group once', async () =
     ('other-group','other.myshopify.com','main')`);
   const db = adapter(sqlite);
   const { code } = await createPairingCode(db, 'main-group');
+  sqlite.exec("UPDATE sync_groups SET status='active' WHERE id='main-group'");
+  assert.equal(await redeemPairingCode(db, 'child.myshopify.com', 'child-group', code), false);
+  sqlite.exec("UPDATE sync_groups SET status='setup' WHERE id='main-group'");
   assert.equal(await redeemPairingCode(db, 'child.myshopify.com', 'child-group', code), true);
   assert.deepEqual({ ...sqlite.prepare('SELECT group_id, role FROM group_stores WHERE shop = ?')
     .get('child.myshopify.com') }, { group_id: 'main-group', role: 'child' });

@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { encrypt } from '../src/security.mjs';
 import { processLink } from '../src/inventory.mjs';
+import { prepareConflictPreview } from '../src/conflicts.mjs';
 
 function d1(sqlite) {
   return {
@@ -63,12 +64,16 @@ async function setup(main = 10, child = 10, initialized = 1) {
   await db.prepare("INSERT INTO sync_jobs (link_id,dirty) VALUES ('link',1)").run();
   const quantities = { 'main.myshopify.com': main, 'child.myshopify.com': child };
   const writes = [];
+  const eligibility = {};
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
     const shop = new URL(url).hostname;
     const { query, variables } = JSON.parse(options.body);
     if (query.includes('query Quantity')) {
       return Response.json({ data: { inventoryItem: { sku: 'SKU', tracked: true,
+        requiresShipping: true, duplicateSkuCount: 0,
+        variants: { nodes: [{ inventoryPolicy: 'DENY' }], pageInfo: { hasNextPage: false } },
+        ...eligibility[shop],
         inventoryLevel: { quantities: [{ name: 'available', quantity: quantities[shop] }] } } } });
     }
     if (query.includes('mutation SetQuantity')) {
@@ -91,9 +96,69 @@ async function setup(main = 10, child = 10, initialized = 1) {
     SHOPIFY_API_VERSION: '2026-07', SHOPIFY_PARTNER_ORG_ID: 'org',
     SHOPIFY_PARTNER_API_ACCESS_TOKEN: 'partner-token', SHOPIFY_APP_GID: 'app',
     SHOPIFY_APP_HANDLE: 'online-sync' };
-  return { sqlite, db, env, quantities, writes,
+  return { sqlite, db, env, quantities, writes, eligibility,
     close() { globalThis.fetch = originalFetch; sqlite.close(); } };
 }
+
+test('conflict review stages the main baseline without writing, then resume applies it', async () => {
+  const state = await setup();
+  try {
+    state.sqlite.exec("UPDATE sync_groups SET status='paused'; UPDATE inventory_links SET status='blocked',block_reason='Ambiguous changes'");
+    state.quantities['main.myshopify.com'] = 7;
+    state.quantities['child.myshopify.com'] = 8;
+    const group = { id: 'group', main_shop: 'main.myshopify.com', role: 'main', status: 'paused' };
+    const result = await prepareConflictPreview(state.db, group, 'link', state.env);
+    assert.equal(result.mainQuantity, 7);
+    assert.equal(result.stores.find(member => member.shop === 'child.myshopify.com').quantity, 8);
+    assert.equal(state.writes.length, 0);
+    assert.equal(state.sqlite.prepare("SELECT status FROM inventory_links WHERE id='link'").get().status, 'preview');
+    state.sqlite.exec("UPDATE sync_groups SET status='active'; UPDATE inventory_links SET status='active'");
+    await processLink(state.env, 'link');
+    assert.equal(state.quantities['child.myshopify.com'], 7);
+  } finally { state.close(); }
+});
+
+test('a duplicate SKU or changed overselling policy blocks the SKU before writing', async () => {
+  for (const changed of [{ duplicateSkuCount: 1 },
+    { variants: { nodes: [{ inventoryPolicy: 'CONTINUE' }], pageInfo: { hasNextPage: false } } }]) {
+    const state = await setup(10, 8, 0);
+    try {
+      state.eligibility['child.myshopify.com'] = changed;
+      await processLink(state.env, 'link');
+      assert.equal(state.sqlite.prepare("SELECT status FROM inventory_links WHERE id='link'").get().status, 'blocked');
+      assert.equal(state.writes.length, 0);
+    } finally { state.close(); }
+  }
+});
+
+test('conflict review refuses another group, child access, active syncing, and a busy job', async () => {
+  const state = await setup();
+  try {
+    state.sqlite.exec("UPDATE sync_groups SET status='paused'; UPDATE inventory_links SET status='blocked'");
+    const group = { id: 'group', main_shop: 'main.myshopify.com', role: 'main', status: 'paused' };
+    await assert.rejects(prepareConflictPreview(state.db, { ...group, id: 'other' }, 'link', state.env), /not found/);
+    await assert.rejects(prepareConflictPreview(state.db, { ...group, role: 'child' }, 'link', state.env), /main store/);
+    await assert.rejects(prepareConflictPreview(state.db, { ...group, status: 'active' }, 'link', state.env), /Pause/);
+    state.sqlite.prepare("UPDATE sync_jobs SET lock_owner='worker', lock_until=?").run(Math.floor(Date.now()/1000)+60);
+    await assert.rejects(prepareConflictPreview(state.db, group, 'link', state.env), /still finishing/);
+    assert.equal(state.writes.length, 0);
+  } finally { state.close(); }
+});
+
+test('stock changing after a recovery preview blocks again without copying stale quantities', async () => {
+  const state = await setup();
+  try {
+    state.sqlite.exec("UPDATE sync_groups SET status='paused'; UPDATE inventory_links SET status='blocked'");
+    await prepareConflictPreview(state.db,
+      { id: 'group', main_shop: 'main.myshopify.com', role: 'main', status: 'paused' }, 'link', state.env);
+    state.quantities['child.myshopify.com'] = 9;
+    state.sqlite.exec("UPDATE sync_groups SET status='active'; UPDATE inventory_links SET status='active'");
+    await processLink(state.env, 'link');
+    assert.equal(state.sqlite.prepare("SELECT status FROM inventory_links WHERE id='link'").get().status, 'blocked');
+    assert.equal(state.writes.length, 0);
+    assert.equal(state.quantities['child.myshopify.com'], 9);
+  } finally { state.close(); }
+});
 
 test('a group containing an unapproved store is paused without inventory writes', async () => {
   const state = await setup(10, 8, 0);
@@ -103,6 +168,15 @@ test('a group containing an unapproved store is paused without inventory writes'
     assert.equal(state.sqlite.prepare("SELECT status FROM sync_groups WHERE id='group'").get().status, 'paused');
     assert.equal(state.writes.length, 0);
     assert.equal(state.quantities['child.myshopify.com'], 8);
+  } finally { state.close(); }
+});
+
+test('a delayed queue message for a deleted job is acknowledged without stock changes', async () => {
+  const state = await setup();
+  try {
+    state.sqlite.exec('DELETE FROM sync_jobs');
+    assert.deepEqual(await processLink(state.env, 'link'), { retry: false });
+    assert.equal(state.writes.length, 0);
   } finally { state.close(); }
 });
 
