@@ -42,6 +42,10 @@ test('20 SKUs across three stores: exclusions, 15 manual aliases, initial stock,
   const started=await api('/api/control',{action:'start'});assert.equal(started.group.status,'active');assert.equal(started.links,20);
   assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM inventory_members').get().n,60);
   assert.match((await api('/api/preview',{},409)).error,/Pause/);assert.match((await api('/api/control',{action:'start'},409)).error,/Pause/);const links=sql.prepare('SELECT * FROM inventory_links ORDER BY sku').all();for(const l of links)await processLink(env,l.id);assert.equal(writes.length,40);
+  const safety=await api('/api/inventory-safety-net/run',{});assert.equal(safety.queued,20);assert.equal(safety.enabled,false);
+  for(const link of links)await processLink(env,link.id);assert.equal(writes.length,40);
+  await api('/api/inventory-safety-net',{enabled:true});assert.equal((await api('/api/status')).safetyNet.enabled,true);
+  await api('/api/inventory-safety-net',{enabled:false});assert.equal((await api('/api/status')).group.status,'active');
   for(const [i,link] of links.entries())for(const origin of shops){const members=sql.prepare('SELECT * FROM inventory_members WHERE link_id=?').all(link.id),member=members.find(m=>m.shop===origin),id=origin+'|'+member.inventory_item_id;qty.set(id,qty.get(id)-1);const before=writes.length;await processLink(env,link.id);assert.equal(writes.length-before,2);assert.ok(members.every(m=>qty.get(m.shop+'|'+m.inventory_item_id)===qty.get(id)));await processLink(env,link.id);assert.equal(writes.length-before,2)}
   assert.equal(writes.length,160);assert.equal(sql.prepare("SELECT COUNT(*) AS n FROM inventory_links WHERE status='active'").get().n,20);
   const exported=await api('/api/activity-export?kind=inventory');assert.ok(exported.rows.length>160);assert.ok(exported.rows.some(e=>e.sku==='OS3-020'));assert.ok(!exported.rows.some(e=>e.sku==='OS3-021'));

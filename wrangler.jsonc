@@ -19,7 +19,7 @@
     "consumers": [{ "queue": "online-sync-jobs", "max_batch_size": 1,
       "max_batch_timeout": 5, "max_retries": 5 }]
   },
-  "triggers": { "crons": ["*/5 * * * *", "7 3 * * *"] },
+  "triggers": { "crons": ["*/5 * * * *", "7 3 * * *", "7 15 * * *"] },
   "vars": {
     "SHOPIFY_API_VERSION": "2026-07",
     "SHOPIFY_PARTNER_ORG_ID": "1882822",

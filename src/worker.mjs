@@ -1,3 +1,4 @@
+import { safetyNetStatus, saveSafetyNet, runSafetyNet, scheduleSafetyNet } from './inventory-safety-net.mjs';
 import { verifySessionToken, verifyWebhook, validShop } from './security.mjs';
 import { exchangeOfflineToken, listLocations, saveToken } from './shopify.mjs';
 import { listEligibleVariants } from './catalog.mjs';
@@ -76,7 +77,7 @@ async function status(db, shop, env) {
   return { currentShop: shop, group: { id: group.id, mainShop: group.main_shop, role: group.role,
       status: group.status, previewCompleted: Boolean(group.preview_completed_at), billing },
     stores: members.results, links: Number(counts.links), blocked: Number(counts.blocked ?? 0),
-    maxStores: MAX_GROUP_STORES,
+    maxStores: MAX_GROUP_STORES, safetyNet: await safetyNetStatus(db,group.id),
     canPair: group.role === 'main' && members.results.length < MAX_GROUP_STORES && group.status !== 'active' && Number(counts.established ?? 0) === 0,
     canPreview: group.role === 'main' && group.status !== 'active' && Number(counts.established ?? 0) === 0 &&
       members.results.length >= 2 && members.results.every(member => member.location_id && !member.uninstalled_at),
@@ -214,6 +215,14 @@ async function merchantApi(request, env, path) {
     const group = await currentGroup(db, user.shop);
     if (!group) return json({ error: 'Store is not in a sync group' }, 409);
     if (group.inventory_config_lock && group.inventory_config_lock_until > Math.floor(Date.now()/1000) && request.method !== 'GET') return json({error:'Inventory settings are being saved. Try again shortly.'},409);
+    if (path === '/api/inventory-safety-net' && request.method === 'POST') return json(await saveSafetyNet(db,group,await request.json()));
+    if (path === '/api/inventory-safety-net/run' && request.method === 'POST') {
+      if(group.role!=='main')return json({error:'Open the main store to check inventory'},403);
+      const shops=(await db.prepare('SELECT shop FROM group_stores WHERE group_id=?').bind(group.id).all()).results;
+      if(!shopsAllowedToWrite(env,shops.map(row=>row.shop)))return json({error:'Inventory writes are unavailable for this group'},409);
+      if(!(await activeSubscription(db,group.main_shop,env,{force:true})).active)return json({error:'An active Shopify subscription is required'},402);
+      return json(await runSafetyNet(db,group,env));
+    }
     if (path === '/api/status' && request.method === 'GET') return json(await status(db, user.shop, env));
     if (path === '/api/inventory-settings' && request.method === 'GET') return json(await inventorySettings(db,group.id));
     if (path === '/api/inventory-settings' && request.method === 'POST') return json(await saveInventorySettings(db,group,await request.json()));
@@ -463,18 +472,9 @@ export default {
       WHERE j.dirty=1 AND s.enabled=1 AND (j.lock_owner IS NULL OR j.lock_until<=?) LIMIT 50`).bind(Math.floor(Date.now()/1000)).all()).results;
     for(const job of productJobs)await env.SYNC_QUEUE.send({productJobId:job.id});
     await db.prepare('DELETE FROM product_sync_previews WHERE expires_at<=?').bind(Math.floor(Date.now()/1000)).run();
-    if (event.cron === '7 3 * * *') {
-      await db.prepare(`INSERT OR IGNORE INTO sync_jobs (link_id, dirty)
-        SELECT l.id, 1 FROM inventory_links l JOIN sync_groups g ON g.id = l.group_id
-        WHERE l.status = 'active' AND g.status = 'active'`).run();
-      await db.prepare(`UPDATE sync_jobs SET dirty = 1 WHERE link_id IN
-        (SELECT l.id FROM inventory_links l JOIN sync_groups g ON g.id = l.group_id
-        WHERE l.status = 'active' AND g.status = 'active')`).run();
-      const links = (await db.prepare(`SELECT l.id FROM inventory_links l
-        JOIN sync_groups g ON g.id = l.group_id
-        WHERE l.status = 'active' AND g.status = 'active' LIMIT 10000`).all()).results;
-      await enqueueLinks(env, links.map(x => x.id));
-    } else {
+    const safetyCron=event.cron === '7 3 * * *' || event.cron === '7 15 * * *';
+    if(safetyCron)await scheduleSafetyNet(db);
+    {
       const jobs = (await db.prepare(`SELECT j.link_id FROM sync_jobs j
         JOIN inventory_links l ON l.id = j.link_id
         JOIN sync_groups g ON g.id = l.group_id
@@ -489,7 +489,7 @@ export default {
       await db.prepare("DELETE FROM sync_events WHERE created_at < datetime('now', '-90 days')").run();
       await db.prepare("DELETE FROM operational_issues WHERE resolved_at < datetime('now', '-30 days')").run();
     }
-    await heartbeat(db, event.cron === '7 3 * * *' ? 'daily-reconciliation' : 'queue-recovery');
+    await heartbeat(db, safetyCron ? 'daily-reconciliation' : 'queue-recovery');
     await resolveIssue(db, 'scheduler:' + event.cron);
     } catch (error) {
       try { await recordIssue(db, 'scheduler:' + event.cron, 'scheduler', error); }
