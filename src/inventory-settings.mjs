@@ -2,26 +2,34 @@ import { listEligibleVariants, matchingCatalogs } from './catalog.mjs';
 import { adminGraphql } from './shopify.mjs';
 
 const fail = (message, status = 409) => { throw Object.assign(new Error(message), { status }); };
-export const defaults = () => ({ mode: 'all', includedSkus: [], includedTags: [], includedCollections: [], excludedSkus: [], excludedTags: [], excludedCollections: [], mappings: [] });
+export const defaults = () => ({ mode: 'all', includesEnabled: true, excludesEnabled: true, mappingsEnabled: true, includedSkus: [], includedTags: [], includedCollections: [], excludedSkus: [], excludedTags: [], excludedCollections: [], mappings: [] });
+export function effectiveInventorySettings(settings) {
+  const active = { ...defaults(), ...settings };
+  if (!active.includesEnabled) for (const field of ['Skus','Tags','Collections']) active['included'+field]=[];
+  if (!active.excludesEnabled) for (const field of ['Skus','Tags','Collections']) active['excluded'+field]=[];
+  if (!active.mappingsEnabled) active.mappings=[];
+  return active;
+}
 export async function inventorySettings(db, groupId) {
   const row = await db.prepare('SELECT settings FROM inventory_settings WHERE group_id=?').bind(groupId).first();
   return row ? { ...defaults(), ...JSON.parse(row.settings) } : defaults();
 }
 export function selectedInventory(variant, settings, manuallyMapped = false) {
+  settings=effectiveInventorySettings(settings);
   const any = prefix => settings[prefix+'Skus'].includes(variant.sku) ||
     settings[prefix+'Tags'].some(tag => (variant.tags || []).some(t => t.toLowerCase() === tag.toLowerCase())) ||
     settings[prefix+'Collections'].some(id => (variant.collections || []).some(c => c.id === id));
   if ((settings.includedCollections.length || settings.excludedCollections.length) && variant.collectionsIncomplete) fail('A product has more than 250 collections; narrow its collections before using collection filters');
-  return !any('excluded') && (settings.mode === 'all' || manuallyMapped || any('included'));
+  return !any('excluded') && (settings.mode === 'all' || (settings.mappingsEnabled && manuallyMapped) || any('included'));
 }
 export function inventoryMatches(source, targets, shops, settings, mainShop = '__main__') {
+  settings=effectiveInventorySettings(settings);
   const catalogs=new Map([[mainShop,source],...shops.map((shop,index)=>[shop,targets[index]])]);
   const graph=new Map(), nodes=new Map();
   const node=(shop,sku)=>{const key=JSON.stringify([shop,sku]);nodes.set(key,{shop,sku});if(!graph.has(key))graph.set(key,new Set());return key};
   for(const mapping of settings.mappings){
     const a={shop:mapping.sourceShop||mainShop,sku:mapping.sourceSku||mapping.mainSku};
     const b={shop:mapping.targetShop||mapping.shop,sku:mapping.targetSku};
-    if(!catalogs.get(a.shop)?.has(a.sku)||!catalogs.get(b.shop)?.has(b.sku))fail('A manual mapping has a missing, duplicated or ineligible SKU. Correct it before previewing.');
     const left=node(a.shop,a.sku),right=node(b.shop,b.sku);graph.get(left).add(right);graph.get(right).add(left);
   }
   const assignments=new Map(),visited=new Set();
@@ -32,14 +40,25 @@ export function inventoryMatches(source, targets, shops, settings, mainShop = '_
     const mainSku=component.get(mainShop);
     const candidates=mainSku?[mainSku]:[...new Set([...component.values()].filter(sku=>source.has(sku)))];
     if(candidates.length!==1)fail('Connect this manual mapping to one main-store SKU, directly or through another mapping.');
-    const canonical=candidates[0],assigned=assignments.get(canonical)||new Map();
+    const canonical=candidates[0],variant=source.get(canonical);
+    // A known excluded main product is ignored even when its saved alias is stale.
+    if(settings.excludedSkus.includes(canonical)||(variant&&!selectedInventory(variant,{...settings,mode:'all'},true)))continue;
+    for(const [shop,sku] of component)if(!catalogs.get(shop)?.has(sku))fail('A manual mapping has a missing, duplicated or ineligible SKU. Correct it before previewing.');
+    const assigned=assignments.get(canonical)||new Map();
     for(const [shop,sku] of component){if(assigned.has(shop)&&assigned.get(shop)!==sku)fail('Two manual mappings give the same main SKU different targets in one store.');assigned.set(shop,sku)}assignments.set(canonical,assigned);
   }
   const selected = new Map([...source].filter(([sku,variant]) => selectedInventory(variant,settings,assignments.has(sku))));
   const aliases=targets.map((target,index)=>{const mapped=new Map(target);for(const [canonical,assignment] of assignments){const sku=assignment.get(shops[index]);if(sku)mapped.set(canonical,target.get(sku))}return mapped});
-  const matches = matchingCatalogs(selected,aliases);
+  let matches = matchingCatalogs(selected,aliases);
   for(const row of matches)row.manuallyMapped=assignments.has(row.sku);
-  // Includes collisions between manual mappings and automatic same-SKU matches.
+  // Explicit mappings reserve their inventory items before automatic matches.
+  const reserved=targets.map(()=>new Set());
+  for(const row of matches.filter(row=>row.manuallyMapped))for(let index=0;index<targets.length;index++){
+    const id=row.children[index].itemId;
+    if(reserved[index].has(id))fail('Two manual mappings point to the same connected-store inventory item. Correct the manual mappings.');
+    reserved[index].add(id);
+  }
+  matches=matches.filter(row=>row.manuallyMapped||row.children.every((child,index)=>!reserved[index].has(child.itemId)));
   for (let index=0; index<targets.length; index++) {
     const used = new Set();
     for (const row of matches) {
@@ -54,6 +73,10 @@ export function inventoryMatches(source, targets, shops, settings, mainShop = '_
 export function validateSettings(input, shops, mainShop = '__main__') {
   if (!input || !['all','selected'].includes(input.mode)) fail('Choose all products or selected products',400);
   const result = defaults(); result.mode=input.mode;
+  for(const key of ['includesEnabled','excludesEnabled','mappingsEnabled']){
+    if(input[key]!==undefined&&typeof input[key]!=='boolean')fail('Rule switches must be On or Off',400);
+    result[key]=input[key]??true;
+  }
   for (const key of ['includedSkus','includedTags','includedCollections','excludedSkus','excludedTags','excludedCollections']) {
     const values=input[key]??[];
     if (!Array.isArray(values) || values.length>100 || values.some(v=>typeof v!=='string'||!v.trim()||v.length>100||/[\p{Cc}\p{Cf}]/u.test(v))) fail('Use up to 100 entries per selection, each up to 100 characters',400);
@@ -88,6 +111,7 @@ export async function catalogOptions(db, group, env) {
   return {skus:[...catalog.values()].map(v=>({sku:v.sku,title:v.title||v.sku})),tags:[...tags].sort(),collections};
 }
 export async function populateCollections(db,shop,env,source,settings) {
+  settings=effectiveInventorySettings(settings);
   const byProduct=new Map();for(const v of source.values()){if(!byProduct.has(v.productId))byProduct.set(v.productId,[]);byProduct.get(v.productId).push(v)}
   for(const id of new Set([...settings.includedCollections,...settings.excludedCollections])) {
     let after=null;
@@ -101,7 +125,7 @@ export async function populateCollections(db,shop,env,source,settings) {
   }
 }
 export async function checkLiveSelection(db,link,mainMember,env) {
-  const settings=await inventorySettings(db,link.group_id);
+  const settings=effectiveInventorySettings(await inventorySettings(db,link.group_id));
   if(settings.mode==='all'&&!settings.excludedSkus.length&&!settings.excludedTags.length&&!settings.excludedCollections.length)return;
   const ids=[...new Set([...settings.includedCollections,...settings.excludedCollections])];
   const fields=ids.map((id,index)=>`c${index}: inCollection(id:${JSON.stringify(id)})`).join(' ');
@@ -116,13 +140,32 @@ export async function saveInventorySettings(db, group, input) {
   const members=(await db.prepare('SELECT shop,role FROM group_stores WHERE group_id=?').bind(group.id).all()).results;
   const settings=validateSettings(input,members.map(m=>m.shop),group.main_shop);
   return withInventoryLock(db,group,async()=>{
-    await db.batch([
+    await persistInventorySettings(db,group,settings);
+    return settings;
+  });
+}
+
+async function persistInventorySettings(db,group,settings) {
+  await db.batch([
       db.prepare(`INSERT INTO inventory_settings(group_id,settings) VALUES (?,?) ON CONFLICT(group_id) DO UPDATE SET settings=excluded.settings,updated_at=CURRENT_TIMESTAMP`).bind(group.id,JSON.stringify(settings)),
       db.prepare(`UPDATE sync_events SET sku=(SELECT l.sku FROM inventory_links l WHERE l.id=sync_events.link_id) WHERE group_id=? AND sku IS NULL AND link_id IS NOT NULL`).bind(group.id),
       db.prepare('DELETE FROM inventory_links WHERE group_id=?').bind(group.id),
       db.prepare('UPDATE sync_groups SET preview_completed_at=NULL WHERE id=?').bind(group.id),
       db.prepare(`INSERT INTO sync_events(group_id,shop,event_type,detail) VALUES (?,?,'inventory_settings','Inventory selection and mappings saved; a new stock preview is required. No stock changed.')`).bind(group.id,group.main_shop)
-    ]);
+  ]);
+}
+
+export async function setInventorySection(db,group,input) {
+  if(group.role!=='main')fail('Open the main store to change inventory rules',403);
+  const fields={automatic:'mode',included:'includesEnabled',excluded:'excludesEnabled',mappings:'mappingsEnabled'};
+  if(!input||!Object.hasOwn(fields,input.section)||typeof input.enabled!=='boolean')fail('Choose a section and On or Off',400);
+  return withInventoryLock(db,group,async()=>{
+    // Read under the configuration lock; switches never consume unsaved form edits.
+    const saved=await inventorySettings(db,group.id);
+    const field=fields[input.section],value=input.section==='automatic'?(input.enabled?'all':'selected'):input.enabled;
+    if(saved[field]===value)return saved;
+    const settings={...saved,[field]:value};
+    await persistInventorySettings(db,group,settings);
     return settings;
   });
 }

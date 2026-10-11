@@ -5,7 +5,7 @@ import { createPairingCode, redeemPairingCode, MAX_GROUP_STORES } from './pairin
 import { appPage } from './app-page.mjs';
 import { customerActivity } from './customer-activity.mjs';
 import { saveStoreName, storeName } from './store-names.mjs';
-import { inventorySettings, saveInventorySettings, catalogOptions, inventoryMatches, withInventoryLock, populateCollections } from './inventory-settings.mjs';
+import { inventorySettings, saveInventorySettings, setInventorySection, catalogOptions, inventoryMatches, withInventoryLock, populateCollections } from './inventory-settings.mjs';
 import { exportActivity } from './activity-export.mjs';
 import { publicPage } from './public-pages.mjs';
 import { activeSubscription, refreshSubscriptionSnapshots } from './billing.mjs';
@@ -208,6 +208,7 @@ async function merchantApi(request, env, path) {
     if (path === '/api/status' && request.method === 'GET') return json(await status(db, user.shop, env));
     if (path === '/api/inventory-settings' && request.method === 'GET') return json(await inventorySettings(db,group.id));
     if (path === '/api/inventory-settings' && request.method === 'POST') return json(await saveInventorySettings(db,group,await request.json()));
+    if (path === '/api/inventory-section' && request.method === 'POST') return json(await setInventorySection(db,group,await request.json()));
     if (path === '/api/inventory-options' && request.method === 'GET') return json(await catalogOptions(db,group,env));
     if (path === '/api/activity-export' && request.method === 'GET') {
       const params=new URL(request.url).searchParams;
