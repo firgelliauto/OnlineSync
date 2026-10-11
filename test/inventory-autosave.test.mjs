@@ -10,7 +10,7 @@ function harness() {
   const context=vm.createContext({$,current:{group:{role:'main'}},inventorySettingsLoaded:true,inventorySwitchBusy:false,inventoryAutoEnabled:true,inventoryRules:{includedSkus:[],excludedSkus:[]},legacyInventoryRules:{},renderInventoryToggle(){},renderRuleSwitches(){},render(){},inventoryNote:note=>notes.push(note),message(){},api:async(path,method='GET',input)=>{
     calls.push([path,method]);
     if(path==='/api/status')return {group:{status:active?'active':'paused'}};
-    if(path==='/api/control'){active=false;return {}};
+    if(path==='/api/control'){active=input.action==='start';return {}};
     if(method==='GET')return structuredClone(saved);
     if(failNext){failNext=false;throw Error('Temporary save failure')}
     saved=structuredClone(input);return saved;
@@ -30,4 +30,11 @@ test('autosave failures show an error and do not stop later edits from saving',a
   const h=harness();h.fail();h.context.inventoryRules.excludedSkus=['A'];await h.context.queueInventorySave('excluded');
   assert.ok(h.notes.some(note=>note.includes('Not saved')));assert.deepEqual(h.saved.excludedSkus,[]);
   h.context.inventoryRules.excludedSkus=['A','B'];await h.context.queueInventorySave('excluded');assert.deepEqual(h.saved.excludedSkus,['A','B']);
+});
+
+test('On activation saves its setting before starting without a manual preview request',async()=>{
+ const h=harness();await h.context.inventoryWork(async()=>{},'switch:automatic',true);
+ assert.deepEqual(h.calls.filter(([path])=>path==='/api/control').map(([,method])=>method),['POST','POST']);
+ assert.ok(!h.calls.some(([path])=>path==='/api/preview'));
+ assert.ok(h.notes.some(note=>note.includes('Inventory syncing is active')));
 });

@@ -163,9 +163,18 @@ async function control(db, group, env, input) {
   if (!shopsAllowedToWrite(env, stores.map(store => store.shop))) {
     return json({ error: 'Inventory writes are restricted to the configured pilot stores' }, 409);
   }
-  const links = (await db.prepare(`SELECT id FROM inventory_links
+  let links = (await db.prepare(`SELECT id FROM inventory_links
     WHERE group_id = ? AND status IN ('preview', 'active')`).bind(group.id).all()).results;
-  if (!links.length) return json({ error: 'Prepare a read-only preview first' }, 409);
+  if (!links.length) {
+    // First activation builds the matching catalog automatically under the same
+    // configuration lock. Preparing a preview is an optional merchant action.
+    const planned = await preview(db, group, env);
+    if (!planned.ok) return planned;
+    group = await currentGroup(db, group.main_shop);
+    links = (await db.prepare(`SELECT id FROM inventory_links
+      WHERE group_id = ? AND status = 'preview'`).bind(group.id).all()).results;
+    if (!links.length) return json({ error: 'No eligible matching SKUs found. Check your SKU rules and inventory locations.' }, 409);
+  }
   const previewLink = await db.prepare(`SELECT 1 AS found FROM inventory_links
     WHERE group_id = ? AND status = 'preview' LIMIT 1`).bind(group.id).first();
   if (previewLink && !group.preview_completed_at) {

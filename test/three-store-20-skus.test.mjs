@@ -28,7 +28,19 @@ test('20 SKUs across three stores: exclusions, 15 manual aliases, initial stock,
   const env={DB:db,TOKEN_ENCRYPTION_KEY:key,SHOPIFY_CLIENT_ID:'client',SHOPIFY_CLIENT_SECRET:'secret',INVENTORY_WRITES_ENABLED:'true',INVENTORY_WRITE_ALLOWED_SHOPS:shops.join(','),SHOPIFY_API_VERSION:'2026-07',SHOPIFY_PARTNER_ORG_ID:'org',SHOPIFY_PARTNER_API_ACCESS_TOKEN:'partner',SHOPIFY_APP_GID:'app',SHOPIFY_APP_HANDLE:'online-sync',SYNC_QUEUE:{sendBatch:async()=>{}}};
   const api=async(path,input,expectedStatus=200)=>{const r=await worker.fetch(new Request('https://test.invalid'+path,{method:input?'POST':'GET',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:input?JSON.stringify(input):undefined}),env,{});const data=await r.json();assert.equal(r.status,expectedStatus,JSON.stringify(data));return data};
   const settings={...defaults(),mode:'selected',includedTags:['pilot'],excludedTags:['skip'],excludedSkus:['OS3-021'],mappings:catalogs.slice(1).flatMap((variants,i)=>variants.filter(v=>v.sku.endsWith(i===0?'-SECOND':'-THIRD')).map(v=>({sourceShop:shops[i+1],sourceSku:v.sku,targetShop:i===0?shops[0]:shops[1],targetSku:i===0?v.product.title:catalogs[1].find(row=>row.product.title===v.product.title).sku})))};
-  await api('/api/inventory-settings',settings);const preview=await api('/api/preview',{});assert.equal(preview.matched,20);assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM inventory_members').get().n,60);await api('/api/control',{action:'start'});
+  await api('/api/inventory-settings',settings);
+  // Activation validates pairing, locations and billing before preparing anything.
+  sql.prepare("UPDATE group_stores SET location_id=NULL WHERE shop=?").run(shops[2]);
+  assert.match((await api('/api/control',{action:'start'},409)).error,/configure/);
+  assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM inventory_links').get().n,0);
+  sql.prepare("UPDATE group_stores SET location_id='gid://shopify/Location/1' WHERE shop=?").run(shops[2]);
+  await api('/api/inventory-settings',{...settings,includedTags:[],mappings:[]});
+  assert.match((await api('/api/control',{action:'start'},409)).error,/No eligible matching SKUs/);
+  assert.equal(sql.prepare('SELECT status FROM sync_groups').get().status,'setup');
+  await api('/api/inventory-settings',settings);
+  // No manual preview request: first Start discovers and initializes all 20 SKUs.
+  const started=await api('/api/control',{action:'start'});assert.equal(started.group.status,'active');assert.equal(started.links,20);
+  assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM inventory_members').get().n,60);
   assert.match((await api('/api/preview',{},409)).error,/Pause/);assert.match((await api('/api/control',{action:'start'},409)).error,/Pause/);const links=sql.prepare('SELECT * FROM inventory_links ORDER BY sku').all();for(const l of links)await processLink(env,l.id);assert.equal(writes.length,40);
   for(const [i,link] of links.entries())for(const origin of shops){const members=sql.prepare('SELECT * FROM inventory_members WHERE link_id=?').all(link.id),member=members.find(m=>m.shop===origin),id=origin+'|'+member.inventory_item_id;qty.set(id,qty.get(id)-1);const before=writes.length;await processLink(env,link.id);assert.equal(writes.length-before,2);assert.ok(members.every(m=>qty.get(m.shop+'|'+m.inventory_item_id)===qty.get(id)));await processLink(env,link.id);assert.equal(writes.length-before,2)}
   assert.equal(writes.length,160);assert.equal(sql.prepare("SELECT COUNT(*) AS n FROM inventory_links WHERE status='active'").get().n,20);
