@@ -43,6 +43,7 @@ The sample Minimal Snowboard was assigned `ONLINESYNC-PILOT-001` on both stores.
 Implemented:
 
 - Optional missing-product drafts through explicit reviewed previews. Only wholly absent SKU sets qualify; partial matches stop. New products are DRAFT with zero copied stock, required title/SKUs/options plus selected fields. Durable creation receipts and locks recover committed responses without repeating writes. Automatic/catalog updates never create products. Gift cards and bundles are excluded.
+- Customer pages: Home for setup, subscription and inventory controls; Inventory syncing for shared stock, previews, recovery and inventory activity; Product syncing for field selections, price rules, previews and product activity. Navigation preserves unsaved choices, supports browser back/forward and direct page reloads. Disabled controls retain the hand cursor.
 - Editable store names shared across each group, used in customer activity, previews and price rules. The main store can rename all members; connected stores can rename themselves. Names never change Shopify identities or stock settings.
 - Price rules per connected store: percentage then fixed adjustment, currency precision, nearest whole amount or rounding upward to .99. Compare-at adjustment is separately optional. Rules respect field choices and matching currencies; changed rules invalidate old previews.
 
