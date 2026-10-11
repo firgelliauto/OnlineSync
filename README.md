@@ -4,6 +4,8 @@ OnlineSync is a hosted, multi-merchant Shopify app for keeping inventory aligned
 
 ## Current state
 
+Home includes a five-step setup guide with progress derived from the connected stores, locations, completed stock preview, subscription and active sync state. Each expandable step links to the relevant controls; product syncing is optional. Inventory automatic matching uses separate On/Off buttons. Manual SKU mappings stay in a fixed-height, keyboard-accessible scroll panel, with case-insensitive search across both SKUs and store names. Search hides rows without removing them from saved settings.
+
 The application is deployed to its own Cloudflare resources and linked to a new Shopify public app. Installation, authentication, pairing, locations, billing, two-store sales, conflict recovery, and uninstall/reinstall have been verified on two isolated development stores. `INVENTORY_WRITES_ENABLED` is `true`, with the allowlist restricting writes to those two stores. Public merchant writes remain disabled. The old `M:/syncApp` deployment is separate and has not been changed.
 
 OnlineSync hosting:

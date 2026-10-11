@@ -74,7 +74,7 @@ async function status(db, shop, env) {
   try { billing = await activeSubscription(db, group.main_shop, env); }
   catch (error) { console.error('Billing check failed', error); billing = { state: 'unavailable', active: false }; }
   return { currentShop: shop, group: { id: group.id, mainShop: group.main_shop, role: group.role,
-      status: group.status, billing },
+      status: group.status, previewCompleted: Boolean(group.preview_completed_at), billing },
     stores: members.results, links: Number(counts.links), blocked: Number(counts.blocked ?? 0),
     maxStores: MAX_GROUP_STORES,
     canPair: group.role === 'main' && members.results.length < MAX_GROUP_STORES && group.status !== 'active' && Number(counts.established ?? 0) === 0,
