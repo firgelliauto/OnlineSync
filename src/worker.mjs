@@ -4,6 +4,7 @@ import { listEligibleVariants, matchingCatalogs } from './catalog.mjs';
 import { createPairingCode, redeemPairingCode, MAX_GROUP_STORES } from './pairing.mjs';
 import { appPage } from './app-page.mjs';
 import { customerActivity } from './customer-activity.mjs';
+import { saveStoreName, storeName } from './store-names.mjs';
 import { publicPage } from './public-pages.mjs';
 import { activeSubscription, refreshSubscriptionSnapshots } from './billing.mjs';
 import { enqueueLinks, processLink } from './inventory.mjs';
@@ -48,7 +49,7 @@ async function status(db, shop, env) {
   const group = await currentGroup(db, shop);
   if (!group) throw new Error('No sync group found');
   const [members, counts, recent, blockedLinks, pendingPreview, inventory] = await Promise.all([
-    db.prepare(`SELECT gs.shop, gs.role, gs.location_id, s.uninstalled_at FROM group_stores gs
+    db.prepare(`SELECT gs.shop, gs.role, gs.location_id, gs.display_name, s.uninstalled_at FROM group_stores gs
       JOIN stores s ON s.shop = gs.shop WHERE gs.group_id = ? ORDER BY gs.role DESC, gs.shop`)
       .bind(group.id).all(),
     db.prepare(`SELECT COUNT(*) AS links, SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked,
@@ -77,7 +78,7 @@ async function status(db, shop, env) {
     canPair: group.role === 'main' && members.results.length < MAX_GROUP_STORES && group.status !== 'active' && Number(counts.established ?? 0) === 0,
     canPreview: group.role === 'main' && group.status !== 'active' && Number(counts.established ?? 0) === 0 &&
       members.results.length >= 2 && members.results.every(member => member.location_id && !member.uninstalled_at),
-    recent: customerActivity(recent.results, group.main_shop), blockedLinks: blockedLinks.results, pendingPreview: pendingPreview.results,
+    recent: customerActivity(recent.results, group.main_shop, Object.fromEntries(members.results.map(member => [member.shop, storeName(member)]))), blockedLinks: blockedLinks.results, pendingPreview: pendingPreview.results,
     inventory: inventory.results,
     inventoryWritesEnabled: shopsAllowedToWrite(env, members.results.map(member => member.shop)) };
 }
@@ -200,6 +201,11 @@ async function merchantApi(request, env, path) {
     const group = await currentGroup(db, user.shop);
     if (!group) return json({ error: 'Store is not in a sync group' }, 409);
     if (path === '/api/status' && request.method === 'GET') return json(await status(db, user.shop, env));
+    if (path === '/api/store-name' && request.method === 'POST') {
+      const input = await request.json();
+      await saveStoreName(db, group, user.shop, input.shop, input.name);
+      return json(await status(db, user.shop, env));
+    }
     if (path === '/api/product-settings' && request.method === 'GET') return json(await productSettings(db,group.id));
     if (path === '/api/product-access' && request.method === 'POST') {
       await saveToken(db,user.shop,await exchangeOfflineToken(user.shop,idToken,env),env);

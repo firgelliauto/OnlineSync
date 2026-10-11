@@ -1,12 +1,12 @@
 // Present recorded events without changing stock or inferring unrecorded sales.
-export function customerActivity(events, mainShop) {
+export function customerActivity(events, mainShop, storeNames = {}) {
   const rows = events.map(event => ({ ...event, sku: event.sku ||
     (/^Stock change received for (.+)$/.exec(event.detail)?.[1] ??
       (event.link_id && event.detail.includes(': ') ? event.detail.slice(0, event.detail.lastIndexOf(': ')) : null))
   })).sort((a, b) => a.id - b.id);
   const hidden = new Set(), combined = [], latest = new Map();
   const childShops = new Set(rows.map(e => e.shop).filter(shop => shop && shop !== mainShop));
-  const store = shop => !shop ? '' : shop === mainShop ? 'Main store' : childShops.size > 1 ? 'Child store (' + shop + ')' : 'Child store';
+  const store = shop => !shop ? '' : Object.hasOwn(storeNames, shop) ? storeNames[shop] : shop === mainShop ? 'Main store' : childShops.size > 1 ? 'Child store (' + shop + ')' : 'Child store';
   const names = { inventory_webhook: 'Order or stock change received', stock_change: 'Stock change detected',
     inventory_write: 'Quantity updated', initialized: 'SKU initialized', blocked: 'SKU blocked',
     paused: 'Sync paused', preview: 'Stock preview prepared', conflict_preview: 'Recovery preview prepared',
@@ -43,7 +43,8 @@ export function customerActivity(events, mainShop) {
       event.id > previous && event.id <= last.id) hidden.add(event.id);
   }
   return [...rows.filter(e => !hidden.has(e.id)).map(event => {
-    const detail = event.sku && event.detail.startsWith(event.sku + ': ') ? event.detail.slice(event.sku.length + 2) : event.detail;
+    let detail = event.sku && event.detail.startsWith(event.sku + ': ') ? event.detail.slice(event.sku.length + 2) : event.detail;
+    for (const [shop, name] of Object.entries(storeNames)) detail = detail.replaceAll(shop, () => name);
     return { ...event, type: event.event_type, level: ['blocked','product_sync_error'].includes(event.event_type) ? 'error' : event.event_type === 'paused' ? 'warning' : 'info',
       title: (names[event.event_type] || event.event_type.replaceAll('_', ' ')) + (event.sku ? ' · ' + event.sku : ''),
       description: event.event_type === 'inventory_webhook' ? store(event.shop) + ' · Stock notification recorded.' : [event.shop && store(event.shop), detail].filter(Boolean).join(' · '),
