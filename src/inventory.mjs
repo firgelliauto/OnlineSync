@@ -3,6 +3,7 @@ import { activeSubscription } from './billing.mjs';
 import { planSharedQuantity } from './sync-plan.mjs';
 import { shopsAllowedToWrite } from './write-policy.mjs';
 import { recordIssue, resolveIssue } from './operations.mjs';
+import { checkLiveSelection } from './inventory-settings.mjs';
 
 export async function readQuantity(db, member, sku, env) {
   const data = await adminGraphql(db, member.shop, env, `query Quantity($item: ID!, $location: ID!) {
@@ -12,7 +13,7 @@ export async function readQuantity(db, member, sku, env) {
       quantities(names: ["available"]) { name quantity } } }
   }`, { item: member.inventory_item_id, location: member.location_id });
   const item = data.inventoryItem;
-  if (!item || item.sku?.trim() !== sku || !item.tracked || !item.requiresShipping ||
+  if (!item || item.sku?.trim() !== (member.mapped_sku || sku) || !item.tracked || !item.requiresShipping ||
       item.duplicateSkuCount !== 0 || !item.variants?.nodes?.length ||
       item.variants.pageInfo?.hasNextPage || item.variants.nodes.some(variant => variant.inventoryPolicy !== 'DENY')) {
     const error = new Error(`${member.shop}: SKU uniqueness, tracking, shipping, or out-of-stock selling changed`);
@@ -171,6 +172,7 @@ export async function processLink(env, linkId) {
       await block(db, link, 'A connected store was uninstalled');
       return { retry: false };
     }
+    await checkLiveSelection(db,link,members.find(m=>m.shop===link.main_shop),env);
     const pending = await db.prepare('SELECT 1 AS found FROM sync_writes WHERE link_id = ? LIMIT 1')
       .bind(linkId).first();
     if (pending) {

@@ -32,7 +32,7 @@ function d1(sqlite) {
 async function setup(main = 10, child = 10, initialized = 1, extraStores = []) {
   const sqlite = new DatabaseSync(':memory:');
   for (const name of ['0001_initial.sql', '0002_token_lock.sql', '0003_sync_queue.sql',
-    '0004_preview_marker.sql', '0005_billing_cache.sql', '0006_developer_dashboard.sql']) {
+    '0004_preview_marker.sql', '0005_billing_cache.sql', '0006_developer_dashboard.sql', '0010_inventory_selection.sql']) {
     sqlite.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), 'utf8'));
   }
   const db = d1(sqlite);

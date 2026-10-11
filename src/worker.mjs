@@ -1,10 +1,12 @@
 import { verifySessionToken, verifyWebhook, validShop } from './security.mjs';
 import { exchangeOfflineToken, listLocations, saveToken } from './shopify.mjs';
-import { listEligibleVariants, matchingCatalogs } from './catalog.mjs';
+import { listEligibleVariants } from './catalog.mjs';
 import { createPairingCode, redeemPairingCode, MAX_GROUP_STORES } from './pairing.mjs';
 import { appPage } from './app-page.mjs';
 import { customerActivity } from './customer-activity.mjs';
 import { saveStoreName, storeName } from './store-names.mjs';
+import { inventorySettings, saveInventorySettings, catalogOptions, inventoryMatches, withInventoryLock, populateCollections } from './inventory-settings.mjs';
+import { exportActivity } from './activity-export.mjs';
 import { publicPage } from './public-pages.mjs';
 import { activeSubscription, refreshSubscriptionSnapshots } from './billing.mjs';
 import { enqueueLinks, processLink } from './inventory.mjs';
@@ -21,7 +23,7 @@ const invalidSession = () => new Response(JSON.stringify({ error: 'Invalid Shopi
 });
 
 async function currentGroup(db, shop) {
-  return db.prepare(`SELECT g.id, g.main_shop, g.status, g.preview_completed_at,
+  return db.prepare(`SELECT g.id, g.main_shop, g.status, g.preview_completed_at, g.inventory_config_lock, g.inventory_config_lock_until,
     gs.role, gs.location_id
     FROM group_stores gs JOIN sync_groups g ON g.id = gs.group_id WHERE gs.shop = ?`)
     .bind(shop).first();
@@ -55,7 +57,7 @@ async function status(db, shop, env) {
     db.prepare(`SELECT COUNT(*) AS links, SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked,
       SUM(CASE WHEN status <> 'preview' THEN 1 ELSE 0 END) AS established
       FROM inventory_links WHERE group_id = ?`).bind(group.id).first(),
-    db.prepare(`SELECT e.id, e.shop, e.link_id, e.event_type, e.detail, e.created_at, l.sku
+    db.prepare(`SELECT e.id, e.shop, e.link_id, e.event_type, e.detail, e.created_at, COALESCE(e.sku,l.sku) AS sku
       FROM sync_events e LEFT JOIN inventory_links l ON l.id = e.link_id AND l.group_id = e.group_id
       WHERE e.group_id = ? ORDER BY e.id DESC LIMIT 150`).bind(group.id).all(),
     db.prepare(`SELECT id, sku, block_reason FROM inventory_links
@@ -97,9 +99,11 @@ async function preview(db, group, env) {
   if (members.length > MAX_GROUP_STORES) return json({ error: 'Groups support up to four stores' }, 409);
   const main = members.find(m => m.role === 'main');
   const children = members.filter(m => m.role === 'child');
+  const settings = await inventorySettings(db,group.id);
   const [source, ...targets] = await Promise.all(members.map(m =>
-    listEligibleVariants(db, m.shop, m.location_id, env)));
-  const matches = matchingCatalogs(source, targets);
+    listEligibleVariants(db, m.shop, m.location_id, env, m.role==='main')));
+  await populateCollections(db,group.main_shop,env,source,settings);
+  const matches = inventoryMatches(source, targets, children.map(m=>m.shop), settings);
   if (matches.length > 10000) return json({ error: 'Catalog exceeds current preview limit' }, 413);
   // This operation records a read-only plan. No Shopify inventory mutation is called.
   await db.prepare('UPDATE sync_groups SET preview_completed_at = NULL WHERE id = ?')
@@ -114,16 +118,16 @@ async function preview(db, group, env) {
       (id, group_id, sku, shared_quantity, status) VALUES ${
         chunk.map(() => "(?, ?, ?, ?, 'preview')").join(', ')}`;
     const memberRows = chunk.flatMap(row => [
-      [row.id, main.shop, row.source.itemId, main.location_id, row.source.quantity],
+      [row.id, main.shop, row.source.itemId, main.location_id, row.source.quantity, row.source.sku],
       ...children.map((child, i) => [row.id, child.shop, row.children[i].itemId,
-        child.location_id, row.children[i].quantity])
+        child.location_id, row.children[i].quantity, row.children[i].sku])
     ]);
     const statements = [db.prepare(linkSql).bind(...linkValues)];
-    for (let i = 0; i < memberRows.length; i += 20) {
-      const batch = memberRows.slice(i, i + 20);
+    for (let i = 0; i < memberRows.length; i += 16) {
+      const batch = memberRows.slice(i, i + 16);
       const memberSql = `INSERT INTO inventory_members
-        (link_id, shop, inventory_item_id, location_id, last_quantity) VALUES ${
-          batch.map(() => '(?, ?, ?, ?, ?)').join(', ')}`;
+        (link_id, shop, inventory_item_id, location_id, last_quantity, mapped_sku) VALUES ${
+          batch.map(() => '(?, ?, ?, ?, ?, ?)').join(', ')}`;
       statements.push(db.prepare(memberSql).bind(...batch.flat()));
     }
     await db.batch(statements);
@@ -200,7 +204,15 @@ async function merchantApi(request, env, path) {
     if (!store) return json({ error: 'Open the app again to finish installation' }, 409);
     const group = await currentGroup(db, user.shop);
     if (!group) return json({ error: 'Store is not in a sync group' }, 409);
+    if (group.inventory_config_lock && group.inventory_config_lock_until > Math.floor(Date.now()/1000) && request.method !== 'GET') return json({error:'Inventory settings are being saved. Try again shortly.'},409);
     if (path === '/api/status' && request.method === 'GET') return json(await status(db, user.shop, env));
+    if (path === '/api/inventory-settings' && request.method === 'GET') return json(await inventorySettings(db,group.id));
+    if (path === '/api/inventory-settings' && request.method === 'POST') return json(await saveInventorySettings(db,group,await request.json()));
+    if (path === '/api/inventory-options' && request.method === 'GET') return json(await catalogOptions(db,group,env));
+    if (path === '/api/activity-export' && request.method === 'GET') {
+      const params=new URL(request.url).searchParams;
+      return json(await exportActivity(db,group.id,Number(params.get('after')||0),params.get('kind')||'inventory'));
+    }
     if (path === '/api/store-name' && request.method === 'POST') {
       const input = await request.json();
       await saveStoreName(db, group, user.shop, input.shop, input.name);
@@ -271,7 +283,7 @@ async function merchantApi(request, env, path) {
       if (!joined) return json({ error: 'Code invalid, expired, or unavailable. Groups support up to four stores; connect them before starting sync.' }, 400);
       return json(await status(db, user.shop, env));
     }
-    if (path === '/api/preview' && request.method === 'POST') return preview(db, group, env);
+    if (path === '/api/preview' && request.method === 'POST') return await withInventoryLock(db,group,()=>preview(db, group, env));
     if (path === '/api/conflict-preview' && request.method === 'POST') {
       const input = await request.json();
       if (typeof input.linkId !== 'string' || input.linkId.length > 100) {
@@ -280,7 +292,7 @@ async function merchantApi(request, env, path) {
       return json(await prepareConflictPreview(db, group, input.linkId, env));
     }
     if (path === '/api/control' && request.method === 'POST') {
-      return control(db, group, env, await request.json());
+      const input=await request.json();return await (input.action==='pause'?control(db,group,env,input):withInventoryLock(db,group,()=>control(db,group,env,input),true));
     }
     return json({ error: 'Not found' }, 404);
   } catch (error) {

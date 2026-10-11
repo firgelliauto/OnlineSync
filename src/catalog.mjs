@@ -1,6 +1,6 @@
 import { adminGraphql } from './shopify.mjs';
 
-export async function listEligibleVariants(db, shop, locationId, env) {
+export async function listEligibleVariants(db, shop, locationId, env, metadata = false) {
   if (!/^gid:\/\/shopify\/Location\/\d+$/.test(locationId ?? '')) throw new Error('Choose a valid location');
   const bySku = new Map();
   const seenSkus = new Set();
@@ -8,7 +8,7 @@ export async function listEligibleVariants(db, shop, locationId, env) {
   do {
     const data = await adminGraphql(db, shop, env, `query Variants($after: String, $location: ID!) {
       productVariants(first: 100, after: $after) {
-        nodes { sku inventoryPolicy inventoryItem { id tracked requiresShipping
+        nodes { sku inventoryPolicy ${metadata ? 'product { id title tags }' : ''} inventoryItem { id tracked requiresShipping
           inventoryLevel(locationId: $location) { quantities(names: ["available"]) { name quantity } } } }
         pageInfo { hasNextPage endCursor }
       }
@@ -23,7 +23,8 @@ export async function listEligibleVariants(db, shop, locationId, env) {
           variant.inventoryPolicy !== 'DENY') continue;
       const quantity = variant.inventoryItem.inventoryLevel?.quantities?.find(x => x.name === 'available')?.quantity;
       if (!Number.isInteger(quantity) || quantity < 0) continue;
-      bySku.set(sku, { sku, itemId: variant.inventoryItem.id, quantity });
+      bySku.set(sku, { sku, itemId: variant.inventoryItem.id, quantity,
+        ...(metadata ? { productId: variant.product?.id, title: variant.product?.title, tags: variant.product?.tags || [], collections: [] } : {}) });
     }
     if (!data.productVariants.pageInfo.hasNextPage) break;
     after = data.productVariants.pageInfo.endCursor;

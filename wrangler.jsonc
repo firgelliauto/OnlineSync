@@ -16,7 +16,7 @@
   ],
   "queues": {
     "producers": [{ "binding": "SYNC_QUEUE", "queue": "online-sync-jobs" }],
-    "consumers": [{ "queue": "online-sync-jobs", "max_batch_size": 10,
+    "consumers": [{ "queue": "online-sync-jobs", "max_batch_size": 1,
       "max_batch_timeout": 5, "max_retries": 5 }]
   },
   "triggers": { "crons": ["*/5 * * * *", "7 3 * * *"] },
@@ -27,6 +27,6 @@
     "SHOPIFY_APP_HANDLE": "onlinesync-3",
     "INVENTORY_WRITES_ENABLED": "true",
     "PRODUCT_WRITES_ENABLED": "true",
-    "INVENTORY_WRITE_ALLOWED_SHOPS": "onlinesync-pilot-main.myshopify.com,onlinesync-pilot-second.myshopify.com"
+    "INVENTORY_WRITE_ALLOWED_SHOPS": "onlinesync-pilot-main.myshopify.com,onlinesync-pilot-second.myshopify.com,onlinesync-pilot-third.myshopify.com"
   }
 }
