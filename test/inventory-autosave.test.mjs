@@ -36,5 +36,5 @@ test('On activation saves its setting before starting without a manual preview r
  const h=harness();await h.context.inventoryWork(async()=>{},'switch:automatic',true);
  assert.deepEqual(h.calls.filter(([path])=>path==='/api/control').map(([,method])=>method),['POST','POST']);
  assert.ok(!h.calls.some(([path])=>path==='/api/preview'));
- assert.ok(h.notes.some(note=>note.includes('Inventory syncing is active')));
+ assert.ok(h.notes.some(note=>note.includes('Saved automatically.')));
 });
