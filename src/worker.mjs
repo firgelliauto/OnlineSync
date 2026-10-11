@@ -103,7 +103,7 @@ async function preview(db, group, env) {
   const [source, ...targets] = await Promise.all(members.map(m =>
     listEligibleVariants(db, m.shop, m.location_id, env, m.role==='main')));
   await populateCollections(db,group.main_shop,env,source,settings);
-  const matches = inventoryMatches(source, targets, children.map(m=>m.shop), settings);
+  const matches = inventoryMatches(source, targets, children.map(m=>m.shop), settings, group.main_shop);
   if (matches.length > 10000) return json({ error: 'Catalog exceeds current preview limit' }, 413);
   // This operation records a read-only plan. No Shopify inventory mutation is called.
   await db.prepare('UPDATE sync_groups SET preview_completed_at = NULL WHERE id = ?')
@@ -111,12 +111,12 @@ async function preview(db, group, env) {
   await db.prepare('DELETE FROM inventory_links WHERE group_id = ? AND status = ?')
     .bind(group.id, 'preview').run();
   // D1 permits at most 100 bound parameters in one statement.
-  for (let offset = 0; offset < matches.length; offset += 25) {
-    const chunk = matches.slice(offset, offset + 25).map(match => ({ ...match, id: crypto.randomUUID() }));
-    const linkValues = chunk.flatMap(row => [row.id, group.id, row.sku, row.source.quantity]);
+  for (let offset = 0; offset < matches.length; offset += 20) {
+    const chunk = matches.slice(offset, offset + 20).map(match => ({ ...match, id: crypto.randomUUID() }));
+    const linkValues = chunk.flatMap(row => [row.id, group.id, row.sku, row.source.quantity, row.manuallyMapped?1:0]);
     const linkSql = `INSERT INTO inventory_links
-      (id, group_id, sku, shared_quantity, status) VALUES ${
-        chunk.map(() => "(?, ?, ?, ?, 'preview')").join(', ')}`;
+      (id, group_id, sku, shared_quantity, manually_mapped, status) VALUES ${
+        chunk.map(() => "(?, ?, ?, ?, ?, 'preview')").join(', ')}`;
     const memberRows = chunk.flatMap(row => [
       [row.id, main.shop, row.source.itemId, main.location_id, row.source.quantity, row.source.sku],
       ...children.map((child, i) => [row.id, child.shop, row.children[i].itemId,

@@ -4,6 +4,36 @@ import {defaults,selectedInventory,inventoryMatches,validateSettings,saveInvento
 import {csvCell,exportActivity} from '../src/activity-export.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync,readdirSync} from 'node:fs';
+test('automatic matching off allows only explicit includes and manual mappings, with exclusions winning',()=>{
+ const variants=values=>new Map(values.map(sku=>[sku,{sku,itemId:sku}]));
+ const source=variants(['A','B','C']),targets=[variants(['A','B','C']),variants(['A','B','C'])],settings={...defaults(),mode:'selected'};
+ assert.deepEqual(inventoryMatches(source,targets,['second','third'],settings,'main'),[]);
+ settings.includedSkus=['A'];assert.deepEqual(inventoryMatches(source,targets,['second','third'],settings,'main').map(r=>r.sku),['A']);
+ settings.mappings=[{sourceShop:'second',sourceSku:'B',targetShop:'third',targetSku:'B'}];
+ assert.deepEqual(inventoryMatches(source,targets,['second','third'],settings,'main').map(r=>r.sku),['A','B']);
+ settings.excludedSkus=['A','B'];assert.deepEqual(inventoryMatches(source,targets,['second','third'],settings,'main'),[]);
+ settings.mode='all';assert.deepEqual(inventoryMatches(source,targets,['second','third'],settings,'main').map(r=>r.sku),['C']);
+});
+test('explicit store mappings work in reverse and through child-to-child chains without ambiguous identity',()=>{
+ const variants=values=>new Map(values.map(sku=>[sku,{sku,itemId:sku}]));
+ const source=variants(['A','B']),targets=[variants(['SECOND']),variants(['THIRD'])],settings={...defaults(),mode:'selected',mappings:[
+  {sourceShop:'second',sourceSku:'SECOND',targetShop:'main',targetSku:'A'},
+  {sourceShop:'third',sourceSku:'THIRD',targetShop:'second',targetSku:'SECOND'}
+ ]};
+ const rows=inventoryMatches(source,targets,['second','third'],settings,'main');assert.equal(rows.length,1);assert.equal(rows[0].sku,'A');assert.equal(rows[0].manuallyMapped,true);assert.deepEqual(rows[0].children.map(v=>v.sku),['SECOND','THIRD']);
+ settings.mappings.push({sourceShop:'third',sourceSku:'THIRD',targetShop:'main',targetSku:'B'});
+ assert.throws(()=>inventoryMatches(source,targets,['second','third'],settings,'main'),/same store/);
+ settings.mappings=[{sourceShop:'second',sourceSku:'SECOND',targetShop:'third',targetSku:'THIRD'}];
+ assert.throws(()=>inventoryMatches(source,targets,['second','third'],settings,'main'),/main-store SKU/);
+ assert.throws(()=>inventoryMatches(source,[variants(['A']),variants(['B'])],['second','third'],{...defaults(),mappings:[{sourceShop:'second',sourceSku:'A',targetShop:'third',targetSku:'B'}]},'main'),/main-store SKU/);
+});
+test('mapping validation requires two explicit group stores, preserves reverse direction and allows automatic matching off with no rules',()=>{
+ const settings={...defaults(),mode:'selected',mappings:[{sourceShop:'third',sourceSku:'X',targetShop:'main',targetSku:'A'}]};
+ assert.deepEqual(validateSettings(settings,['main','second','third'],'main').mappings,settings.mappings);
+ for(const sourceShop of ['',null,'foreign'])assert.throws(()=>validateSettings({...settings,mappings:[{...settings.mappings[0],sourceShop}]},['main','second','third'],'main'),/connected stores/);
+ assert.throws(()=>validateSettings({...settings,mappings:[{...settings.mappings[0],targetShop:'third'}]},['main','second','third'],'main'),/different/);
+ assert.equal(validateSettings({...defaults(),mode:'selected'},['main','second'],'main').mode,'selected');
+});
 function fixture(){const sql=new DatabaseSync(':memory:');for(const f of readdirSync('migrations').filter(f=>f.endsWith('.sql')).sort())sql.exec(readFileSync('migrations/'+f,'utf8'));sql.exec(`INSERT INTO stores(shop,access_token_cipher,refresh_token_cipher,token_expires_at,refresh_expires_at) VALUES('main','x','x',1,1),('child','x','x',1,1),('other','x','x',1,1);INSERT INTO sync_groups(id,main_shop,status) VALUES('g','main','paused'),('o','other','setup');INSERT INTO group_stores(group_id,shop,role) VALUES('g','main','main'),('g','child','child'),('o','other','main');`);const db={prepare(query){const make=values=>({first:async()=>sql.prepare(query).get(...values)??null,all:async()=>({results:sql.prepare(query).all(...values)}),run:async()=>({meta:{changes:Number(sql.prepare(query).run(...values).changes)}})});return {...make([]),bind:(...values)=>make(values)}},async batch(statements){sql.exec('BEGIN');try{const results=[];for(const s of statements)results.push(await s.run());sql.exec('COMMIT');return results}catch(e){sql.exec('ROLLBACK');throw e}}};return {sql,db}}
 test('product selections use OR includes and exclusion precedence for SKUs, tags and collections',()=>{const s=defaults(),v={sku:'A',tags:['Summer'],collections:[{id:'gid://shopify/Collection/1'}]};assert.equal(selectedInventory(v,s),true);s.mode='selected';assert.equal(selectedInventory(v,s),false);s.includedTags=['summer'];assert.equal(selectedInventory(v,s),true);s.excludedCollections=['gid://shopify/Collection/1'];assert.equal(selectedInventory(v,s),false);s.excludedCollections=[];s.excludedSkus=['A'];assert.equal(selectedInventory(v,s),false);s.includedCollections=['gid://shopify/Collection/2'];assert.throws(()=>selectedInventory({...v,collectionsIncomplete:true},s));});
 test('manual matches reject duplicate targets including collisions with automatic same-SKU matches',()=>{const source=new Map(['A','B'].map(sku=>[sku,{sku,itemId:sku}])),target=new Map([['B',{sku:'B',itemId:'target'}]]),s=defaults();s.mappings=[{mainSku:'A',shop:'child',targetSku:'B'}];assert.throws(()=>inventoryMatches(source,[target],['child'],s),/Two main/);s.excludedSkus=['B'];assert.equal(inventoryMatches(source,[target],['child'],s)[0].children[0].sku,'B');s.mappings[0].targetSku='missing';assert.throws(()=>inventoryMatches(source,[target],['child'],s),/missing/);assert.throws(()=>validateSettings({...defaults(),mappings:[{mainSku:'A',shop:'foreign',targetSku:'B'}]},['child']),/connected store/);});
