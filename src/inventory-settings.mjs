@@ -176,7 +176,7 @@ export async function withInventoryLock(db,group,action,allowPending=false) {
     AND NOT EXISTS (SELECT 1 FROM sync_jobs j JOIN inventory_links l ON l.id=j.link_id WHERE l.group_id=? AND j.lock_owner IS NOT NULL AND j.lock_until>?)
     AND (?=1 OR NOT EXISTS (SELECT 1 FROM sync_writes w JOIN inventory_links l ON l.id=w.link_id WHERE l.group_id=?))`)
     .bind(owner,now+600,group.id,now,group.id,now,allowPending?1:0,group.id).run();
-  if(!claim.meta.changes) fail('Pause inventory syncing on Home and wait for pending updates to finish before saving');
+  if(!claim.meta.changes) fail('Pause inventory syncing on the Inventory syncing page and wait for pending updates to finish before saving');
   try { return await action();
 
   } finally {await db.prepare('UPDATE sync_groups SET inventory_config_lock=NULL,inventory_config_lock_until=0 WHERE id=? AND inventory_config_lock=?').bind(group.id,owner).run()}

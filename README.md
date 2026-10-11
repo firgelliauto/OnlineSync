@@ -4,7 +4,7 @@ OnlineSync is a hosted, multi-merchant Shopify app for keeping inventory aligned
 
 ## Current state
 
-Home includes a five-step setup guide with progress derived from the connected stores, locations, completed stock preview, subscription and active sync state. Each expandable step links to the relevant controls; product syncing is optional. Inventory automatic matching uses separate On/Off buttons. Manual SKU mappings stay in a fixed-height, keyboard-accessible scroll panel, with case-insensitive search across both SKUs and store names. Search hides rows without removing them from saved settings.
+Home includes a five-step setup guide with progress derived from the connected stores, locations, completed stock preview, subscription and active sync state. Each expandable step links to the relevant controls; product syncing is optional. Inventory automatic matching uses separate On/Off buttons. Start/resume/pause controls live on Inventory syncing; Home keeps subscription and store setup. Include/exclude SKU lists use bounded scroll panels with optional vertical resizing. Manual SKU mappings stay in a fixed-height, keyboard-accessible scroll panel, with case-insensitive search across both SKUs and store names. Search hides rows without removing them from saved settings.
 
 Automatic matching, include rules, exclusions and manual mappings have independent switches. Each switch saves only its own setting and ignores unsaved form edits. Disabled sections retain their saved entries and are greyed out. Enabled exclusions win over other rules; explicit mappings reserve their destination inventory items ahead of automatic same-SKU matches. Rule changes still require an idle, paused group and a fresh stock preview before restarting.
 
