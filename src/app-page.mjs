@@ -43,9 +43,8 @@ ${setupGuideHtml}
 <div class="page-links"><a class="page-link" data-page="inventory" href="/inventory"><strong>Inventory syncing</strong><span>Manage SKU rules, prepare quantities and review inventory activity.</span></a><a class="page-link" data-page="products" href="/products"><strong>Product syncing</strong><span>Choose product fields, set price rules and review product copies.</span></a></div>
 </div>
 <div data-page-view="inventory" hidden>
-<section class="panel" id="controlsPanel"><h2>Inventory controls</h2><p>Start, resume or pause live inventory syncing for your store group.</p><div class="row"><button id="start" disabled>Start syncing</button><button id="pause" class="secondary" disabled>Pause syncing</button></div><p class="small">Before starting, prepare a stock preview below and review the main-store starting quantities. Later sales and stock changes in any connected store update the shared quantity. Product syncing has its own controls on the Product syncing page.</p></section>
 ${inventorySettingsHtml}
-<section class="panel"><h2>Read-only stock preview</h2><p>Find unique, tracked physical SKUs present at every selected location. This uses the main store quantity as the proposed starting stock.</p><div class="row"><button id="preview">Prepare preview</button></div><p id="previewResult" class="small"></p><div class="sample" id="sample"></div></section>
+
 <section class="panel" id="reviewPanel" hidden><h2>Inventory needs review</h2><p>Pause syncing, check sales and stock changes in every store, and correct the main store's quantity if needed. Prepare a new preview below to use that main quantity as the starting stock. Resuming will copy it to the other stores.</p><div id="reviewLinks"></div><div id="reviewPreview" class="sample"></div></section>
 </div>
 <div data-page-view="products" hidden>
@@ -92,7 +91,7 @@ function render(data){
   const plans=$('plans');plans.hidden=!billing.planUrl;if(billing.planUrl)plans.href=billing.planUrl;
   $('start').disabled=data.group.role!=='main'||data.group.status==='active'||!data.inventoryWritesEnabled||!billing.active||!data.links||data.stores.some(x=>!x.location_id||x.uninstalled_at);
   $('pause').disabled=data.group.role!=='main'||data.group.status!=='active';
-  $('start').textContent=data.group.status==='paused'?'Resume syncing':'Start syncing';
+  $('start').textContent='Apply reviewed preview and '+(data.group.status==='paused'?'resume syncing':'start syncing');
   $('reviewPanel').hidden=!data.blocked&&!data.pendingPreview?.length;
   const review=$('reviewLinks');review.replaceChildren();
   for(const link of data.blockedLinks||[]){const row=document.createElement('div');row.className='row';const label=document.createElement('p');label.textContent=link.sku+' · '+link.block_reason;const button=document.createElement('button');button.textContent='Prepare new preview for '+link.sku;button.disabled=data.group.role!=='main'||data.group.status!=='paused';button.onclick=()=>reviewConflict(link.id,button);row.append(label,button);review.append(row)}
