@@ -1,3 +1,4 @@
+import { sectionPanelsCss, sectionPanelsScript } from './section-panels.mjs';
 import { productInclusionHtml, productInclusionScript } from './product-inclusion-page.mjs';
 import { classificationHtml, classificationCss, classificationScript } from './inventory-classification-page.mjs';
 import { backupHtml, backupScript } from './inventory-backup-page.mjs';
@@ -29,6 +30,7 @@ ul{padding-left:20px;color:#334b43}li{margin:6px 0}.small{font-size:12px;color:#
 ${setupGuideCss}
 ${inventorySettingsCss}
 ${classificationCss}
+${sectionPanelsCss}
 ${productCss}
 ${planCss}</style></head><body>
 <s-app-nav>
@@ -128,6 +130,7 @@ ${classificationScript()}
 ${safetyNetScript()}
 ${backupScript()}
 ${planScript()}
+${sectionPanelsScript()}
 showPage(activePage);
 load();
 </script></body></html>`;
