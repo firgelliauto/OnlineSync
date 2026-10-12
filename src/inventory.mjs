@@ -1,3 +1,4 @@
+import { assertSkuPlan } from './sku-plans.mjs';
 import { adminGraphql } from './shopify.mjs';
 import { activeSubscription } from './billing.mjs';
 import { planSharedQuantity } from './sync-plan.mjs';
@@ -159,6 +160,7 @@ export async function processLink(env, linkId) {
         'Syncing paused because the main store has no active Shopify subscription');
       return { retry: false };
     }
+    try{await assertSkuPlan(db,link.group_id,subscription)}catch(error){await db.prepare("UPDATE sync_groups SET status='paused' WHERE id=?").bind(link.group_id).run();await log(db,link,link.main_shop,'paused',error.message);return {retry:false}}
     const members = (await db.prepare(`SELECT m.*, s.uninstalled_at FROM inventory_members m
       JOIN stores s ON s.shop = m.shop WHERE m.link_id = ? ORDER BY m.shop`)
       .bind(linkId).all()).results;

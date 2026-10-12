@@ -36,10 +36,10 @@ export async function activeSubscription(db, mainShop, env, { force = false } = 
 
 async function checkSubscription(db, mainShop, env, { force }) {
   if (!billingConfigured(env)) return { state: 'not_configured', active: false };
-  const group = await db.prepare(`SELECT billing_checked_at, billing_active
+  const group = await db.prepare(`SELECT billing_checked_at, billing_active, billing_snapshot
     FROM sync_groups WHERE main_shop = ?`).bind(mainShop).first();
   if (!force && group && group.billing_checked_at > Math.floor(Date.now() / 1000) - 60) {
-    return group.billing_active ? { state: 'active', active: true } :
+    return group.billing_active ? {...(group.billing_snapshot?JSON.parse(group.billing_snapshot):{}),state:'active',active:true} :
       { state: 'plan_required', active: false,
         planUrl: `https://admin.shopify.com/store/${encodeURIComponent(mainShop.split('.')[0])}/charges/${encodeURIComponent(env.SHOPIFY_APP_HANDLE)}/pricing_plans` };
   }
@@ -69,10 +69,7 @@ async function checkSubscription(db, mainShop, env, { force }) {
   const result = await response.json();
   if (result.errors?.length) throw new Error('Partner API subscription check failed');
   const active = Boolean(result.data?.activeSubscription);
-  await db.prepare(`UPDATE sync_groups SET billing_checked_at = ?, billing_active = ?,billing_trial_ends_at=?
-    WHERE main_shop = ?`).bind(Math.floor(Date.now() / 1000), active ? 1 : 0,
-      result.data?.activeSubscription?.trialEndsAt ?? null, mainShop).run();
-  return active ? { state: 'active', active: true,
+  const subscription=active ? { state: 'active', active: true,
     billingPeriod: result.data.activeSubscription.billingPeriod,
     trialEndsAt: result.data.activeSubscription.trialEndsAt,
     cancelAtEndOfCycle: Boolean(result.data.activeSubscription.cancelAtEndOfCycle),
@@ -82,4 +79,6 @@ async function checkSubscription(db, mainShop, env, { force }) {
     planUrl: `https://admin.shopify.com/store/${encodeURIComponent(mainShop.split('.')[0])}/charges/${encodeURIComponent(env.SHOPIFY_APP_HANDLE)}/pricing_plans` } :
     { state: 'plan_required', active: false,
       planUrl: `https://admin.shopify.com/store/${encodeURIComponent(mainShop.split('.')[0])}/charges/${encodeURIComponent(env.SHOPIFY_APP_HANDLE)}/pricing_plans` };
+  await db.prepare(`UPDATE sync_groups SET billing_snapshot=?,billing_checked_at=?,billing_active=?,billing_trial_ends_at=? WHERE main_shop=?`).bind(JSON.stringify(subscription),Math.floor(Date.now()/1000),active?1:0,subscription.trialEndsAt??null,mainShop).run();
+  return subscription;
 }

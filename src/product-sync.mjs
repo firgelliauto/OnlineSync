@@ -1,3 +1,4 @@
+import { reserveSyncedSkus, assertSkuPlan } from './sku-plans.mjs';
 import { adminGraphql } from './shopify.mjs';
 import { activeSubscription } from './billing.mjs';
 import { shopsAllowedToWrite } from './write-policy.mjs';
@@ -109,7 +110,8 @@ export async function saveProductSettings(db,group,fields,enabled,priceRules){
   await db.batch([db.prepare(`INSERT INTO product_sync_settings (group_id,fields,enabled,price_rules) VALUES (?,?,?,?)
     ON CONFLICT(group_id) DO UPDATE SET fields=excluded.fields,enabled=excluded.enabled,price_rules=excluded.price_rules,revision=revision+1,updated_at=CURRENT_TIMESTAMP`).bind(group.id,JSON.stringify(fields),Number(enabled),JSON.stringify(priceRules)),
     db.prepare('DELETE FROM product_sync_previews WHERE group_id=?').bind(group.id),
-    db.prepare('UPDATE product_sync_jobs SET dirty=0 WHERE group_id=?').bind(group.id)]);
+    db.prepare('UPDATE product_sync_jobs SET dirty=0 WHERE group_id=?').bind(group.id),
+    ...(fields.length?[]:[db.prepare("DELETE FROM synced_skus WHERE group_id=? AND kind='product'").bind(group.id)])]);
   return productSettings(db,group.id);
 }
 async function connected(db,groupId){const members=(await db.prepare(`SELECT gs.shop,gs.role,s.uninstalled_at FROM group_stores gs JOIN stores s ON s.shop=gs.shop WHERE gs.group_id=? ORDER BY gs.role DESC,gs.shop`).bind(groupId).all()).results;if(members.length<2||members.length>4||members.some(s=>s.uninstalled_at))fail('Connect two to four installed stores first');return members}
@@ -149,7 +151,7 @@ export async function previewProduct(db,group,sku,env,createMissing=false){
 }
 async function canWrite(db,group,members,env,fields=[]){
   if(env.PRODUCT_WRITES_ENABLED!=='true'||!shopsAllowedToWrite(env,members.map(m=>m.shop)))fail('Product writes are disabled for this group');
-  if(!(await activeSubscription(db,group.main_shop,env)).active)fail('An active main-store subscription is required',402);
+  const subscription=await activeSubscription(db,group.main_shop,env);if(!subscription.active)fail('An active main-store subscription is required',402);await assertSkuPlan(db,group.id,subscription);
   for(const member of members){const scopes=await adminGraphql(db,member.shop,env,'query ProductScopes { currentAppInstallation { accessScopes { handle } } }');
     const handles=scopes.currentAppInstallation.accessScopes.map(s=>s.handle);
     if(!handles.includes('write_products')||fields.includes('images')&&!handles.includes('read_files'))fail(member.shop+': reopen OnlineSync and approve product access');}
@@ -171,6 +173,7 @@ export async function applyProductPreview(db,group,id,env){
   const fresh=await snapshot(db,group,row.source_id,settings.fields,env,{createMissing:Boolean(row.create_missing),offerMissing:true,priceRules:settings.priceRules});
   if(!same(JSON.parse(row.snapshot),fresh))fail('A product or connection changed since preview; prepare a new preview');
   await canWrite(db,group,fresh.members,env,settings.fields);
+  await reserveSyncedSkus(db,group.id,'product',fresh.source.id,skuSet(fresh.source),await activeSubscription(db,group.main_shop,env));
   let stores=0,drafts=0;const createdProducts=[];
   for(const item of fresh.targets){
     const current=await productSettings(db,group.id);if(current.revision!==settings.revision)fail('Settings changed; prepare a new preview');
@@ -209,6 +212,7 @@ export async function processProductJob(env,id){
     }
     const group={id:job.group_id,main_shop:job.main_shop};const value=await snapshot(db,group,job.source_id,settings.fields,env,{priceRules:settings.priceRules});
     await canWrite(db,group,value.members,env,settings.fields);
+    await reserveSyncedSkus(db,group.id,'product',value.source.id,skuSet(value.source),await activeSubscription(db,group.main_shop,env));
     for(const item of value.targets){const current=await productSettings(db,job.group_id);if(!current.enabled||current.revision!==settings.revision)return {retry:false};await applyTarget(db,item.shop,item.target,item.plan,env)}
     if(value.targets.some(t=>t.plan.changes.length))await productLog(db,job.group_id,job.main_shop,'product_sync','Selected product fields copied automatically');
     await resolveIssue(db,'product:'+id);return {retry:false};

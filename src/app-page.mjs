@@ -1,3 +1,4 @@
+import { backupHtml, backupScript } from './inventory-backup-page.mjs';
 import { planCss, planHtml, planScript } from './plan-page.mjs';
 import { safetyNetHtml, safetyNetScript } from './inventory-safety-net-page.mjs';
 import { setupGuideCss, setupGuideHtml, setupGuideScript } from './setup-guide.mjs';
@@ -33,6 +34,7 @@ ${planCss}</style></head><body>
 <s-link href="/products">Product Synchronization</s-link>
 <s-link href="/plan">Plan</s-link>
 </s-app-nav>
+<s-page id="appTitleBar" heading="OnlineSync"><s-button slot="primary-action" id="titleUpgrade">Upgrade</s-button></s-page>
 <main>
 <header><div><div class="eyebrow">OnlineSync</div><h1 id="pageTitle">Home</h1><p id="pageDescription">Connect your stores and manage your synchronization settings.</p></div><button id="refresh" class="secondary">Refresh</button></header>
 <nav class="app-nav" aria-label="OnlineSync pages"><a data-page="home" href="/" aria-current="page">Home</a><a data-page="inventory" href="/inventory">Inventory Synchronization</a><a data-page="products" href="/products">Product Synchronization</a><a data-page="plan" href="/plan">Plan</a></nav>
@@ -57,6 +59,7 @@ ${productHtml}
 </div>
 <section class="panel" id="activityPanel" hidden><div class="activity-head"><div><h2 id="activityTitle">Inventory activity</h2><p class="activity-muted">Recent events recorded by this app. Times are shown in your local time zone.</p></div><span class="activity-muted" id="activityUpdated"></span></div><div class="activity-toolbar"><input id="activitySearch" class="activity-search" type="search" placeholder="Filter by SKU" aria-label="Filter by SKU"><div class="activity-tabs" role="group" aria-label="Activity filters"><button type="button" class="activity-tab active" data-activity-filter="all" aria-pressed="true">All</button><button type="button" class="activity-tab" data-activity-filter="problems" aria-pressed="false">Warnings &amp; errors</button><button type="button" class="activity-tab" data-activity-filter="changes" aria-pressed="false">Stock changes</button></div></div><div class="activity-scroll" tabindex="0" role="region" aria-labelledby="activityTitle"><div id="activity" class="activity-list"></div></div></section>
 ${safetyNetHtml}
+${backupHtml}
 ${activityExportHtml}
 <footer class="small">OnlineSync by Firgelliauto · <a href="/help" target="_blank" rel="noopener">Help</a> · <a href="/privacy" target="_blank" rel="noopener">Privacy</a></footer>
 </main><script>
@@ -67,8 +70,9 @@ function labelStore(node,shop,suffix=''){node.dataset.storeLabel=shop;node.datas
 function refreshStoreLabels(){for(const node of document.querySelectorAll('[data-store-label]'))node.textContent=storeLabel(node.dataset.storeLabel)+(node.dataset.storeSuffix||'')}
 const appPages={plan:{path:'/plan',title:'Plan',description:'View your subscription, compare billing options and find answers.'},home:{path:'/',title:'Home',description:'Connect your stores and manage your synchronization settings.'},inventory:{path:'/inventory',title:'Inventory synchronization',description:'Choose automatic matching, manage SKU rules and review inventory activity.'},products:{path:'/products',title:'Product synchronization',description:'Choose product fields, configure price rules and review product copies.'}};
 let activePage=Object.keys(appPages).find(page=>appPages[page].path===location.pathname)||'home';
-function showPage(page,navigate=false){if(!appPages[page])page='home';activePage=page;$("activityPanel").dataset.page=page;for(const view of document.querySelectorAll('[data-page-view]'))view.hidden=view.dataset.pageView!==page;for(const link of document.querySelectorAll('nav [data-page]')){if(link.dataset.page===page)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current')}for(const link of document.querySelectorAll('a[data-page]'))link.href=appPages[link.dataset.page].path+location.search;$('pageTitle').textContent=appPages[page].title;$('pageDescription').textContent=appPages[page].description;document.title=appPages[page].title+' · OnlineSync';$('overviewCards').hidden=page!=='home';$('activityPanel').hidden=!['inventory','products'].includes(page);$('activityExportPanel').hidden=!['inventory','products'].includes(page);$('safetyNetPanel').hidden=page!=='inventory';$('activityExportKind').value=page==='products'?'products':'inventory';$('message').hidden=!$('message').textContent||(page==='products'&&$('message').className!=='error');$('activityTitle').textContent=page==='products'?'Product activity':'Inventory activity';document.querySelector('[data-activity-filter="changes"]').hidden=page==='products';if(navigate){history.pushState({},'',appPages[page].path+location.search);window.scrollTo(0,0)}if(current){renderActivity();if(page==='plan')renderPlan(current);if(page==='products'&&!productSettingsLoaded)loadProductSettings();if(page==='inventory'&&!inventorySettingsLoaded)loadInventorySettings()}}
+function showPage(page,navigate=false){if(!appPages[page])page='home';activePage=page;$("activityPanel").dataset.page=page;for(const view of document.querySelectorAll('[data-page-view]'))view.hidden=view.dataset.pageView!==page;for(const link of document.querySelectorAll('nav [data-page]')){if(link.dataset.page===page)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current')}for(const link of document.querySelectorAll('a[data-page]'))link.href=appPages[link.dataset.page].path+location.search;$('pageTitle').textContent=appPages[page].title;$('pageDescription').textContent=appPages[page].description;document.title=appPages[page].title+' · OnlineSync';$('overviewCards').hidden=page!=='home';$('activityPanel').hidden=!['inventory','products'].includes(page);$('activityExportPanel').hidden=!['inventory','products'].includes(page);$('safetyNetPanel').hidden=page!=='inventory';$('backupPanel').hidden=page!=='inventory';$('appTitleBar').setAttribute('heading',appPages[page].title);$('activityExportKind').value=page==='products'?'products':'inventory';$('message').hidden=!$('message').textContent||(page==='products'&&$('message').className!=='error');$('activityTitle').textContent=page==='products'?'Product activity':'Inventory activity';document.querySelector('[data-activity-filter="changes"]').hidden=page==='products';if(navigate){history.pushState({},'',appPages[page].path+location.search);window.scrollTo(0,0)}if(current){renderActivity();if(page==='plan')renderPlan(current);if(page==='products'&&!productSettingsLoaded)loadProductSettings();if(page==='inventory'&&!inventorySettingsLoaded)loadInventorySettings()}}
 for(const link of document.querySelectorAll('a[data-page]'))link.onclick=event=>{if(event.button!==0||event.ctrlKey||event.metaKey||event.shiftKey||event.altKey)return;event.preventDefault();showPage(link.dataset.page,true)};
+$('titleUpgrade').onclick=()=>showPage('plan',true);
 window.addEventListener('popstate',()=>showPage(Object.keys(appPages).find(page=>appPages[page].path===location.pathname)||'home'));
 let activityFilter='all';
 const activityDate=value=>new Date(value.includes('T')?value:value.replace(' ','T')+'Z').toLocaleString();
@@ -98,7 +102,7 @@ function render(data){
   for(const link of data.blockedLinks||[]){const row=document.createElement('div');row.className='row';const label=document.createElement('p');label.textContent=link.sku+' · '+link.block_reason;const button=document.createElement('button');button.textContent='Prepare new preview for '+link.sku;button.disabled=data.group.role!=='main'||data.group.status!=='paused';button.onclick=()=>reviewConflict(link.id,button);row.append(label,button);review.append(row)}
   const reviewed=$('reviewPreview');reviewed.replaceChildren();
   for(const item of data.pendingPreview||[]){const row=document.createElement('div');row.textContent=item.sku+' · '+storeLabel(item.shop)+' · '+item.last_quantity+' → '+item.target_quantity;reviewed.append(row)}
-  renderSetupGuide(data);renderSafetyNet(data);renderPlan(data);
+  renderSetupGuide(data);renderSafetyNet(data);renderBackup(data);renderPlan(data);
   renderActivity();$('activityUpdated').textContent='Updated '+new Date().toLocaleTimeString();
 }
 async function load(){try{const data=await api('/api/bootstrap','POST');render(data);const loc=await api('/api/locations');const select=$('location');select.replaceChildren();for(const l of loc.locations){const option=document.createElement('option');option.value=l.id;option.textContent=l.name+(l.isActive?'':' (inactive)');option.disabled=!l.isActive;option.selected=data.stores.find(s=>s.shop===data.currentShop)?.location_id===l.id;select.append(option)}if(!select.value&&loc.locations.length)select.value=loc.locations.find(l=>l.isActive)?.id||'';if(data.stores.some(s=>s.uninstalled_at))message('Synchronization is paused because a connected store uninstalled OnlineSync. Reinstall and reopen the app there before resuming.');else if(data.blocked)message('Some SKUs need review. Pause synchronization and prepare a corrected preview on Inventory synchronization.');else if(data.group.status==='active')message('','ok');else if(data.group.status==='paused')message('Synchronization is paused. Select On on the Inventory synchronization page to resume.');else message('Connected. Choose locations, then turn inventory synchronization On.','ok')}catch(e){message(e.message,'error')}}
@@ -115,6 +119,7 @@ ${setupGuideScript()}
 ${productScript()}
 ${inventorySettingsScript()}
 ${safetyNetScript()}
+${backupScript()}
 ${planScript()}
 showPage(activePage);
 load();

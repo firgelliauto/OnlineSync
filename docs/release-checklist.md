@@ -8,7 +8,7 @@
 - Public Shopify app configuration, minimum inventory scopes, signed inventory/uninstall/privacy webhooks.
 - Two development-store installs, pairing, location selection and read-only baseline preview.
 - Four-store support: pairing capacity, preview invalidation, initial copies, sales in all four directions, echoes, concurrent-change blocking, and paginated previews have automated coverage. A live four-store pilot still needs validation before launch.
-- Main-store Shopify Basic test subscription and Partner API verification; USD 20 monthly, seven-day trial.
+- Main-store Shopify Basic test subscription and Partner API verification; Basic USD 14.99/month (up to 100 synchronized SKUs), Plus USD 24.99/month (101+); annual options save 20%; seven-day trial.
 - Initial stock copy, changes from either store, and actual free development-store orders in both directions.
 - Pause, conflicting-change blocking, durable recovery preview, baseline recovery and echo checks.
 - Real second-store uninstall: token deletion and group pause. Reinstall: fresh encrypted credentials and retained mapping. Manual resume and subsequent 41-to-40 propagation passed.

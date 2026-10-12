@@ -9,7 +9,7 @@ export function customerActivity(events, mainShop, storeNames = {}) {
   const store = shop => !shop ? '' : Object.hasOwn(storeNames, shop) ? storeNames[shop] : shop === mainShop ? 'Main store' : childShops.size > 1 ? 'Child store (' + shop + ')' : 'Child store';
   const names = { inventory_webhook: 'Order or stock change received', stock_change: 'Stock change detected',
     inventory_write: 'Quantity updated', initialized: 'SKU initialized', blocked: 'SKU blocked',
-    inventory_settings: 'Inventory rules saved', safety_net: 'Inventory safety net', paused: 'Synchronization paused', preview: 'Stock preview prepared', conflict_preview: 'Recovery preview prepared',
+    inventory_backup:'Inventory backup downloaded', inventory_restore:'Inventory restored', inventory_restore_error:'Inventory restore needs attention', inventory_settings: 'Inventory rules saved', safety_net: 'Inventory safety net', paused: 'Synchronization paused', preview: 'Stock preview prepared', conflict_preview: 'Recovery preview prepared',
     product_sync: 'Product fields copied', product_created_draft: 'Product draft created', product_sync_error: 'Product copy needs attention' };
   const changes = new Map();
   for (const event of rows) {
@@ -45,7 +45,7 @@ export function customerActivity(events, mainShop, storeNames = {}) {
   return [...rows.filter(e => !hidden.has(e.id)).map(event => {
     let detail = event.sku && event.detail.startsWith(event.sku + ': ') ? event.detail.slice(event.sku.length + 2) : event.detail;
     for (const [shop, name] of Object.entries(storeNames)) detail = detail.replaceAll(shop, () => name);
-    return { ...event, type: event.event_type, level: ['blocked','product_sync_error'].includes(event.event_type) ? 'error' : event.event_type === 'paused' ? 'warning' : 'info',
+    return { ...event, type: event.event_type, level: ['blocked','product_sync_error','inventory_restore_error'].includes(event.event_type) ? 'error' : event.event_type === 'paused' ? 'warning' : 'info',
       title: (names[event.event_type] || event.event_type.replaceAll('_', ' ').replace(/^./,letter=>letter.toUpperCase())) + (event.sku ? ' · ' + event.sku : ''),
       description: event.event_type === 'inventory_webhook' ? store(event.shop) + ' · Stock notification recorded.' : [event.shop && store(event.shop), detail].filter(Boolean).join(' · '),
       changes: ['stock_change', 'inventory_write', 'initialized'].includes(event.event_type) };

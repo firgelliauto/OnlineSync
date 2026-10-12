@@ -150,6 +150,7 @@ async function persistInventorySettings(db,group,settings) {
       db.prepare(`INSERT INTO inventory_settings(group_id,settings) VALUES (?,?) ON CONFLICT(group_id) DO UPDATE SET settings=excluded.settings,updated_at=CURRENT_TIMESTAMP`).bind(group.id,JSON.stringify(settings)),
       db.prepare(`UPDATE sync_events SET sku=(SELECT l.sku FROM inventory_links l WHERE l.id=sync_events.link_id) WHERE group_id=? AND sku IS NULL AND link_id IS NOT NULL`).bind(group.id),
       db.prepare('DELETE FROM inventory_links WHERE group_id=?').bind(group.id),
+      db.prepare("DELETE FROM synced_skus WHERE group_id=? AND kind='inventory'").bind(group.id),
       db.prepare('UPDATE sync_groups SET preview_completed_at=NULL WHERE id=?').bind(group.id),
       db.prepare(`INSERT INTO sync_events(group_id,shop,event_type,detail) VALUES (?,?,'inventory_settings','Inventory selection and mappings saved. Turn On to apply these rules and resume syncing. No stock changed.')`).bind(group.id,group.main_shop)
   ]);

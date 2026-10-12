@@ -1,3 +1,5 @@
+import { downloadBackup, previewRestore, runRestoreBatch, restoreStatus, cancelRestore } from './inventory-backup.mjs';
+import { reserveSyncedSkus, syncedSkuCount, subscriptionPlan } from './sku-plans.mjs';
 import { safetyNetStatus, saveSafetyNet, runSafetyNet, scheduleSafetyNet } from './inventory-safety-net.mjs';
 import { verifySessionToken, verifyWebhook, validShop } from './security.mjs';
 import { exchangeOfflineToken, listLocations, saveToken } from './shopify.mjs';
@@ -24,7 +26,7 @@ const invalidSession = () => new Response(JSON.stringify({ error: 'Invalid Shopi
 });
 
 async function currentGroup(db, shop) {
-  return db.prepare(`SELECT g.id, g.main_shop, g.status, g.preview_completed_at, g.inventory_config_lock, g.inventory_config_lock_until,
+  return db.prepare(`SELECT g.id, g.main_shop, g.status, g.preview_completed_at, g.inventory_config_lock, g.inventory_config_lock_until, g.inventory_restore_id,
     gs.role, gs.location_id
     FROM group_stores gs JOIN sync_groups g ON g.id = gs.group_id WHERE gs.shop = ?`)
     .bind(shop).first();
@@ -79,7 +81,7 @@ async function status(db, shop, env) {
     db.prepare("SELECT 1 AS found FROM sync_events WHERE group_id=? AND event_type IN ('product_sync','product_created_draft') LIMIT 1").bind(group.id).first()
   ]);
   return { currentShop: shop, group: { id: group.id, mainShop: group.main_shop, role: group.role,
-      status: group.status, previewCompleted: Boolean(group.preview_completed_at), billing },
+      status: group.status, previewCompleted: Boolean(group.preview_completed_at), restoreId:group.inventory_restore_id, billing },
     stores: members.results, links: Number(counts.links), blocked: Number(counts.blocked ?? 0),
     maxStores: MAX_GROUP_STORES, safetyNet: await safetyNetStatus(db,group.id),
     productSetup: {fieldsSelected:productConfiguration.fields.length>0,enabled:productConfiguration.enabled,hasCopied:Boolean(productCopy)},
@@ -186,7 +188,8 @@ async function control(db, group, env, input) {
   if (previewLink && !group.preview_completed_at) {
     return json({ error: 'Finish the read-only preview first' }, 409);
   }
-  await db.batch([
+  const chosen=(await db.prepare("SELECT sku FROM inventory_links WHERE group_id=? AND status IN ('preview','active','blocked')").bind(group.id).all()).results;
+  await reserveSyncedSkus(db,group.id,'inventory','',chosen.map(row=>row.sku),subscription,()=>db.batch([
     db.prepare("UPDATE inventory_links SET status = 'active' WHERE group_id = ? AND status = 'preview'")
       .bind(group.id),
     db.prepare("UPDATE sync_groups SET status = 'active' WHERE id = ?").bind(group.id),
@@ -196,7 +199,7 @@ async function control(db, group, env, input) {
     db.prepare(`UPDATE sync_jobs SET dirty = 1 WHERE link_id IN
       (SELECT id FROM inventory_links WHERE group_id = ? AND status = 'active')`)
       .bind(group.id)
-  ]);
+  ]));
   await enqueueLinks(env, links.map(x => x.id));
   return json(await status(db, group.main_shop, env));
 }
@@ -220,6 +223,16 @@ async function merchantApi(request, env, path) {
     const group = await currentGroup(db, user.shop);
     if (!group) return json({ error: 'Store is not in a sync group' }, 409);
     if (group.inventory_config_lock && group.inventory_config_lock_until > Math.floor(Date.now()/1000) && request.method !== 'GET') return json({error:'Inventory settings are being saved. Try again shortly.'},409);
+    if(group.inventory_restore_id && request.method!=='GET' && !path.startsWith('/api/inventory-backup') && !path.startsWith('/api/inventory-restore'))return json({error:'Finish or cancel the inventory restore before changing group settings.'},409);
+    if(path==='/api/inventory-backup'&&request.method==='POST'){const input=await request.json();return json(await downloadBackup(db,group,input.shop,env));}
+    if(path==='/api/inventory-restore/preview'&&request.method==='POST'){
+      if(Number(request.headers.get('Content-Length')||0)>3000000)return json({error:'Backup files must be smaller than 3 MB'},413);
+      const raw=await request.text();if(raw.length>3000000)return json({error:'Backup files must be smaller than 3 MB'},413);
+      const input=JSON.parse(raw);return json(await previewRestore(db,group,input.shop,input.backup,env));
+    }
+    if(path==='/api/inventory-restore/run'&&request.method==='POST')return json(await runRestoreBatch(db,group,(await request.json()).id,env));
+    if(path==='/api/inventory-restore/cancel'&&request.method==='POST')return json(await cancelRestore(db,group,(await request.json()).id));
+    if(path==='/api/inventory-restore/status'&&request.method==='GET')return json(await restoreStatus(db,group,new URL(request.url).searchParams.get('id')));
     if (path === '/api/inventory-safety-net' && request.method === 'POST') return json(await saveSafetyNet(db,group,await request.json()));
     if (path === '/api/inventory-safety-net/run' && request.method === 'POST') {
       if(group.role!=='main')return json({error:'Open the main store to check inventory'},403);
@@ -232,7 +245,7 @@ async function merchantApi(request, env, path) {
     if (path === '/api/plan' && request.method === 'GET') {
       const billing=await activeSubscription(db,group.main_shop,env,{force:true});
       const main=await db.prepare('SELECT is_development FROM stores WHERE shop=?').bind(group.main_shop).first();
-      return json({billing,isDevelopment:main?.is_development===1});
+      return json({billing,isDevelopment:main?.is_development===1,skuUsage:await syncedSkuCount(db,group.id),skuPlan:subscriptionPlan(billing)});
     }
     if (path === '/api/inventory-settings' && request.method === 'GET') return json(await inventorySettings(db,group.id));
     if (path === '/api/inventory-settings' && request.method === 'POST') return json(await saveInventorySettings(db,group,await request.json()));

@@ -7,7 +7,29 @@
     "name": "Basic",
     "handle": "basic",
     "currency": "USD",
-    "monthlyPrice": 20,
-    "trialDays": 7
-  }
+    "monthlyPrice": 14.99,
+    "trialDays": 7,
+    "annualPrice": 143.9,
+    "maxSyncedSkus": 100
+  },
+  "plans": [
+    {
+      "name": "Basic",
+      "handle": "basic",
+      "currency": "USD",
+      "monthlyPrice": 14.99,
+      "trialDays": 7,
+      "annualPrice": 143.9,
+      "maxSyncedSkus": 100
+    },
+    {
+      "name": "Plus",
+      "handle": "plus",
+      "currency": "USD",
+      "monthlyPrice": 24.99,
+      "annualPrice": 239.9,
+      "trialDays": 7,
+      "maxSyncedSkus": null
+    }
+  ]
 }
