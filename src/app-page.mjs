@@ -27,18 +27,18 @@ ${inventorySettingsCss}
 ${productCss}</style></head><body>
 <s-app-nav>
 <s-link href="/" rel="home">Home</s-link>
-<s-link href="/inventory">Inventory synchronization</s-link>
-<s-link href="/products">Product synchronization</s-link>
+<s-link href="/inventory">Inventory Synchronization</s-link>
+<s-link href="/products">Product Synchronization</s-link>
 </s-app-nav>
 <main>
 <header><div><div class="eyebrow">OnlineSync</div><h1 id="pageTitle">Home</h1><p id="pageDescription">Connect your stores and manage your synchronization settings.</p></div><button id="refresh" class="secondary">Refresh</button></header>
-<nav class="app-nav" aria-label="OnlineSync pages"><a data-page="home" href="/" aria-current="page">Home</a><a data-page="inventory" href="/inventory">Inventory synchronization</a><a data-page="products" href="/products">Product synchronization</a></nav>
+<nav class="app-nav" aria-label="OnlineSync pages"><a data-page="home" href="/" aria-current="page">Home</a><a data-page="inventory" href="/inventory">Inventory Synchronization</a><a data-page="products" href="/products">Product Synchronization</a></nav>
 <div id="message" class="notice">Connecting to Shopify…</div>
 <div data-page-view="home">
 ${setupGuideHtml}
 <div class="cards" id="overviewCards"><div class="card"><div class="label">Synchronization status</div><div class="value" id="state">—</div></div><div class="card"><div class="label">Connected stores</div><div class="value" id="storesCount">—</div></div><div class="card"><div class="label">Matching SKUs</div><div class="value" id="links">—</div></div><div class="card"><div class="label">Requires review</div><div class="value" id="blocked">—</div></div></div>
 <section class="panel" id="storesPanel"><h2>Your store group</h2><p id="mainStore">Loading…</p><div class="store-table-wrap"><table class="store-table"><thead><tr><th>Role</th><th>Store name</th><th>Connection</th><th></th></tr></thead><tbody id="stores"></tbody></table></div><p class="small">Names are shared across this group. The main store can rename all stores; each connected store can rename itself. Leave a name empty to use its Shopify store handle.</p><p class="small">Connect up to four stores: one main store and three additional stores. The main store supplies the starting quantity. Later sales in any connected store reduce the same shared stock pool.</p></section>
-<section class="panel" id="billingPanel"><h2>Subscription</h2><p id="billing">Checking subscription…</p><a id="plans" hidden target="_top" rel="noopener">Choose a plan in Shopify</a><p class="small">Your main store’s subscription covers this store group. Manage live inventory synchronization on <a data-page="inventory" href="/inventory">Inventory synchronization</a>.</p></section>
+<section class="panel" id="billingPanel"><h2>Subscription</h2><p id="billing">Checking subscription…</p><a id="plans" hidden target="_top" rel="noopener">Choose a plan in Shopify</a><p class="small">Your main store’s subscription covers this store group. Manage live inventory synchronization on <a data-page="inventory" href="/inventory">Inventory Synchronization</a>.</p></section>
 <section class="panel" id="locationPanel"><h2>Choose this store's inventory location</h2><p>Choose the location whose available quantity should be shared.</p><div class="row"><select id="location"><option value="">Loading locations…</option></select><button id="saveLocation">Save location</button></div></section>
 <section class="panel" id="pairPanel"><h2>Connect another store</h2><p>Connect each additional store with its own pairing code.</p><p id="pairCapacity" class="small"></p><div class="row"><button id="makeCode">Create pairing code</button><code id="pairCode" hidden></code></div><div class="row"><input id="joinCode" placeholder="Code from main store" maxlength="24" autocomplete="off"><button id="join">Join group</button></div><p class="small">Codes expire after 10 minutes and can be used once. Connect all stores before starting the initial synchronization; adding a store clears the previous stock preview.</p></section>
 <div class="page-links"><a class="page-link" data-page="inventory" href="/inventory"><strong>Inventory synchronization</strong><span>Manage SKU rules, prepare quantities and review inventory activity.</span></a><a class="page-link" data-page="products" href="/products"><strong>Product synchronization</strong><span>Choose product fields, set price rules and review product copies.</span></a></div>
