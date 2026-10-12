@@ -74,10 +74,15 @@ async function status(db, shop, env) {
   let billing;
   try { billing = await activeSubscription(db, group.main_shop, env); }
   catch (error) { console.error('Billing check failed', error); billing = { state: 'unavailable', active: false }; }
+  const [productConfiguration, productCopy] = await Promise.all([
+    productSettings(db,group.id),
+    db.prepare("SELECT 1 AS found FROM sync_events WHERE group_id=? AND event_type IN ('product_sync','product_created_draft') LIMIT 1").bind(group.id).first()
+  ]);
   return { currentShop: shop, group: { id: group.id, mainShop: group.main_shop, role: group.role,
       status: group.status, previewCompleted: Boolean(group.preview_completed_at), billing },
     stores: members.results, links: Number(counts.links), blocked: Number(counts.blocked ?? 0),
     maxStores: MAX_GROUP_STORES, safetyNet: await safetyNetStatus(db,group.id),
+    productSetup: {fieldsSelected:productConfiguration.fields.length>0,enabled:productConfiguration.enabled,hasCopied:Boolean(productCopy)},
     canPair: group.role === 'main' && members.results.length < MAX_GROUP_STORES && group.status !== 'active' && Number(counts.established ?? 0) === 0,
     canPreview: group.role === 'main' && group.status !== 'active' && Number(counts.established ?? 0) === 0 &&
       members.results.length >= 2 && members.results.every(member => member.location_id && !member.uninstalled_at),

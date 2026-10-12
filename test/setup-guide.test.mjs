@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { setupSteps } from '../src/setup-guide.mjs';
+import { setupSteps, productSetupSteps } from '../src/setup-guide.mjs';
 import { appPage } from '../src/app-page.mjs';
 
 const ready = () => ({ stores: [{ location_id: 'main' }, { location_id: 'child' }],
@@ -34,4 +34,21 @@ test('merchant page scripts compile after composing setup and inventory modules'
   for (const match of appPage('test').matchAll(/<script(?:[^>]*)>([\s\S]*?)<\/script>/g)) {
     if (match[1].trim()) assert.doesNotThrow(() => new Function(match[1]));
   }
+});
+
+test('optional product progress follows saved fields, recorded copies and automatic settings independently of inventory', () => {
+  const data=ready();
+  assert.deepEqual(productSetupSteps(data),[false,false,false]);
+  data.productSetup={fieldsSelected:true,hasCopied:false,enabled:false};
+  assert.deepEqual(productSetupSteps(data),[true,false,false]);
+  data.productSetup.hasCopied=true;
+  assert.deepEqual(productSetupSteps(data),[true,true,false]);
+  data.productSetup.enabled=true;
+  assert.deepEqual(productSetupSteps(data),[true,true,true]);
+  data.group.status='paused';
+  assert.deepEqual(productSetupSteps(data),[true,true,true]);
+  data.group.billing.active=false;
+  assert.deepEqual(productSetupSteps(data),[true,true,false]);
+  data.stores[1].uninstalled_at='now';
+  assert.deepEqual(productSetupSteps(data),[false,false,false]);
 });
