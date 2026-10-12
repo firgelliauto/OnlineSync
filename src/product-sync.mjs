@@ -99,7 +99,7 @@ export async function draftPlan(source,fields,rule={}){
   for(const variant of input.variants)for(const field of fields.filter(f=>variantFields.has(f)))changes.push({field,sku:variant.sku,before:null,after:variant[field]});
   return {create:true,input,variants:[],changes};
 }
-export async function productSettings(db,groupId){const row=await db.prepare('SELECT * FROM product_sync_settings WHERE group_id=?').bind(groupId).first();return {fields:row?JSON.parse(row.fields):[],enabled:Boolean(row?.enabled),revision:row?.revision??0,priceRules:row?JSON.parse(row.price_rules):{},inclusion:{...inclusionDefaults(),...JSON.parse(row?.inclusion||'{}')}}}
+export async function productSettings(db,groupId){const row=await db.prepare('SELECT * FROM product_sync_settings WHERE group_id=?').bind(groupId).first();return {fields:row?JSON.parse(row.fields):[],enabled:Boolean(row?.enabled),revision:row?.revision??0,priceRules:row?JSON.parse(row.price_rules):{},inclusion:normalizeInclusion(JSON.parse(row?.inclusion||'{}'))}}
 export async function saveProductInclusion(db,group,input){
  if(group.role!=='main')fail('Open the main store to change product inclusion rules',403);
  const inclusion=normalizeInclusion(input);
@@ -125,7 +125,7 @@ export async function saveProductSettings(db,group,fields,enabled,priceRules){
 async function connected(db,groupId){const members=(await db.prepare(`SELECT gs.shop,gs.role,s.uninstalled_at FROM group_stores gs JOIN stores s ON s.shop=gs.shop WHERE gs.group_id=? ORDER BY gs.role DESC,gs.shop`).bind(groupId).all()).results;if(members.length<2||members.length>4||members.some(s=>s.uninstalled_at))fail('Connect two to four installed stores first');return members}
 async function snapshot(db,group,sourceId,fields,env,{createMissing=false,offerMissing=false,priceRules={},inclusion=inclusionDefaults(),skipExcluded=false}={}){
   const members=await connected(db,group.id);const source=await readProduct(db,group.main_shop,sourceId,env);
-  if(!await productIncluded(db,group.main_shop,source,inclusion,env)){if(skipExcluded)return null;fail('This product does not match the saved inclusion rules or is missing its ready-to-sync tag');}
+  if(!await productIncluded(db,group.main_shop,source,inclusion,env)){if(skipExcluded)return null;fail('This main-store product does not have the required synchronization tag');}
   const skus=skuSet(source);
   const mainMatches=await variantsBySku(db,group.main_shop,skus,env);
   if(skus.some(s=>!mainMatches.get(s)||mainMatches.get(s).product.id!==sourceId))fail('Main-store SKUs are duplicated or changed');

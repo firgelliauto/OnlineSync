@@ -46,16 +46,16 @@ test('ready tags gate manual previews and automatic jobs; manual catalog works w
  const f=await fixture();try{
   await saveProductSettings(f.db,f.group,['title'],false,{});
   await saveProductInclusion(f.db,f.group,{enabled:true,tags:['a'],readyTag:'Ready'});
-  await assert.rejects(previewProduct(f.db,f.group,'SKU-0',f.env),/ready-to-sync/);
+  await assert.rejects(previewProduct(f.db,f.group,'SKU-0',f.env),/required synchronization tag/);
   const settings=await productSettings(f.db,f.group.id);
   await queueProduct(f.env,f.group.id,f.products.get(f.shops[0]).id,{manual:true,revision:settings.revision});const excludedId=f.sent.at(-1).productJobId;await processProductJob(f.env,excludedId);assert.equal(f.writes.length,0);
   f.products.get(f.shops[0]).tags.push('Ready');
   await queueProductCatalog(f.env,f.group.id,'',{manual:true,revision:settings.revision});await processProductJob(f.env,f.sent.at(-1).productJobId);const productJob=f.sent.at(-1).productJobId;assert.match(productJob,/manual:/);await processProductJob(f.env,productJob);assert.equal(f.writes.length,1);assert.equal(f.products.get(f.shops[1]).title,'Main title');
-  const preview=await previewProduct(f.db,f.group,'SKU-0',f.env);f.products.get(f.shops[0]).tags=['a'];await assert.rejects(applyProductPreview(f.db,f.group,preview.id,f.env),/ready-to-sync/);
+  const preview=await previewProduct(f.db,f.group,'SKU-0',f.env);f.products.get(f.shops[0]).tags=['a'];await assert.rejects(applyProductPreview(f.db,f.group,preview.id,f.env),/required synchronization tag/);
  }finally{f.close()}
 });
-test('collection filter membership is required and rule edits invalidate queued manual work',async()=>{
- const f=await fixture();try{await saveProductSettings(f.db,f.group,['title'],false,{});await saveProductInclusion(f.db,f.group,{enabled:true,collections:['gid://shopify/Collection/1'],readyTag:'a'});await assert.rejects(previewProduct(f.db,f.group,'SKU-0',f.env),/inclusion/);f.failure.collectionMember=true;await previewProduct(f.db,f.group,'SKU-0',f.env);const settings=await productSettings(f.db,f.group.id);await queueProduct(f.env,f.group.id,f.products.get(f.shops[0]).id,{manual:true,revision:settings.revision});const id=f.sent.at(-1).productJobId;await saveProductInclusion(f.db,f.group,{enabled:true,tags:['different']});await processProductJob(f.env,id);assert.equal(f.writes.length,0)}finally{f.close()}
+test('the required tag replaces legacy collection rules and rule edits invalidate queued manual work',async()=>{
+ const f=await fixture();try{await saveProductSettings(f.db,f.group,['title'],false,{});await saveProductInclusion(f.db,f.group,{enabled:true,collections:['gid://shopify/Collection/1'],readyTag:'a'});await previewProduct(f.db,f.group,'SKU-0',f.env);const settings=await productSettings(f.db,f.group.id);await queueProduct(f.env,f.group.id,f.products.get(f.shops[0]).id,{manual:true,revision:settings.revision});const id=f.sent.at(-1).productJobId;await saveProductInclusion(f.db,f.group,{enabled:true,tags:['different']});await processProductJob(f.env,id);assert.equal(f.writes.length,0)}finally{f.close()}
 });
 test('price-only plan excludes every unchecked product field and rejects cross-currency prices',async()=>{
   const source=product('source'),target=product('target','Local');target.variants.forEach(v=>v.price='1.00');

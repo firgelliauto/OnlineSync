@@ -1,16 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {normalizeInclusion,selectedProduct,productIncluded} from '../src/product-inclusion.mjs';
-test('product inclusion combines any selector with a required ready tag and empty On matches nothing',()=>{
- const p={tags:['Approved','Ready'],productType:'Shoes'};
- const rules=normalizeInclusion({enabled:true,tags:['approved'],readyTag:'ready'});assert.equal(selectedProduct(p,rules),true);assert.equal(selectedProduct({...p,tags:['Approved']},rules),false);
- assert.equal(selectedProduct(p,normalizeInclusion({enabled:true,productTypes:['shoes']})),true);
- assert.equal(selectedProduct(p,normalizeInclusion({enabled:true,collections:['gid://shopify/Collection/1']}),['gid://shopify/Collection/1']),true);
- assert.equal(selectedProduct(p,normalizeInclusion({enabled:true})),false);assert.equal(selectedProduct(p,normalizeInclusion({enabled:true,readyTag:'Ready'})),true);assert.equal(selectedProduct(p,{...rules,enabled:false}),true);
- assert.throws(()=>normalizeInclusion({tags:['bad\nvalue']}));assert.throws(()=>normalizeInclusion({collections:['Not a collection']}));
+
+test('the single required tag is the only product eligibility condition',()=>{
+ const rules=normalizeInclusion({enabled:true,readyTag:'  Ready  ',tags:['Other'],productTypes:['Shoes'],collections:['gid://shopify/Collection/1']});
+ assert.equal(rules.readyTag,'Ready');assert.deepEqual(rules.tags,[]);assert.deepEqual(rules.productTypes,[]);assert.deepEqual(rules.collections,[]);
+ assert.equal(selectedProduct({tags:['ready']},rules),true);
+ assert.equal(selectedProduct({tags:['Other'],productType:'Shoes'},rules,['gid://shopify/Collection/1']),false);
+ assert.equal(selectedProduct({tags:['Ready later']},rules),false);
+ assert.equal(selectedProduct({tags:[]},rules),false);
+ assert.equal(selectedProduct({tags:['Ready']},{enabled:true}),false);
+ assert.equal(selectedProduct({tags:[]},{...rules,enabled:false}),true);
+ assert.throws(()=>normalizeInclusion({readyTag:'bad\nvalue'}));assert.throws(()=>normalizeInclusion({readyTag:'x'.repeat(101)}));
 });
-test('collection-only rules do not bypass collection membership when ready tag is present',async()=>{
- // Missing collection membership is decidable without any API call when the ready tag is missing.
- assert.equal(await productIncluded(null,'store',{id:'x',tags:[]},{enabled:true,readyTag:'Ready',collections:['gid://shopify/Collection/1']},{}),false);
- assert.equal(selectedProduct({tags:['Ready']},{enabled:true,readyTag:'Ready',collections:['gid://shopify/Collection/1'],tags:[],productTypes:[]},[]),false);
+test('legacy tag settings migrate to one tag and never select products by type or collection',async()=>{
+ assert.equal(normalizeInclusion({enabled:true,tags:['First','Second']}).readyTag,'First');
+ assert.equal(selectedProduct({tags:['Second']},{enabled:true,tags:['First','Second']}),false);
+ assert.equal(await productIncluded(null,'store',{tags:[]},{enabled:true,productTypes:['Shoes'],collections:['gid://shopify/Collection/1']},{}),false);
+ assert.equal(await productIncluded(null,'store',{tags:['Ready']},{enabled:true,readyTag:'Ready',collections:['gid://shopify/Collection/1']},{}),true);
 });

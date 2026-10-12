@@ -279,8 +279,8 @@ async function merchantApi(request, env, path) {
     if(path==='/api/product-inclusion/run'&&request.method==='POST'){
       if(group.role!=='main')return json({error:'Open the main store to synchronize products'},403);
       const settings=await productSettings(db,group.id);if(!settings.fields.length)return json({error:'Save at least one product field before synchronizing'},409);
-      if(!settings.inclusion.enabled)return json({error:'Turn On product inclusion rules before using this Synchronize now button'},409);
-      if(!settings.inclusion.tags.length&&!settings.inclusion.productTypes.length&&!settings.inclusion.collections.length&&!settings.inclusion.readyTag)return json({error:'Add an inclusion tag, product type, collection or ready-to-sync tag first'},409);
+      if(!settings.inclusion.enabled)return json({error:'Turn On the product tag requirement before using Synchronize now'},409);
+      if(!settings.inclusion.readyTag)return json({error:'Enter the required product tag first'},409);
       if(!shopsAllowedToWrite(env,(await db.prepare('SELECT shop FROM group_stores WHERE group_id=?').bind(group.id).all()).results.map(s=>s.shop))||env.PRODUCT_WRITES_ENABLED!=='true')return json({error:'Product writes are unavailable for this group'},409);
       if(!(await activeSubscription(db,group.main_shop,env,{force:true})).active)return json({error:'An active main-store subscription is required'},402);
       await queueProductCatalog(env,group.id,'',{manual:true,revision:settings.revision});
