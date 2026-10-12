@@ -68,12 +68,14 @@ test('pairing admits only three children even with multiple outstanding codes an
     sqlite.exec(`UPDATE sync_groups SET preview_completed_at=CURRENT_TIMESTAMP WHERE id='group0';
       INSERT INTO inventory_links (id,group_id,sku,shared_quantity,status) VALUES ('preview','group0','SKU',10,'preview');`);
     const results = await Promise.all(codes.map(({code},i)=>redeemPairingCode(db,`store${i+1}.myshopify.com`,'group'+(i+1),code)));
-    assert.deepEqual(results,[true,true,true,false]);
+    // Concurrent redemptions can finish in any order; exactly three may join.
+    assert.equal(results.filter(Boolean).length,3);
+    const rejected=results.indexOf(false)+1;
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM group_stores WHERE group_id='group0'").get().count,4);
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM inventory_links WHERE group_id='group0'").get().count,0);
     assert.equal(sqlite.prepare("SELECT preview_completed_at FROM sync_groups WHERE id='group0'").get().preview_completed_at,null);
-    assert.ok(sqlite.prepare("SELECT id FROM sync_groups WHERE id='group4'").get());
-    assert.equal(sqlite.prepare("SELECT group_id FROM group_stores WHERE shop='store4.myshopify.com'").get().group_id,'group4');
+    assert.ok(sqlite.prepare('SELECT id FROM sync_groups WHERE id=?').get('group'+rejected));
+    assert.equal(sqlite.prepare('SELECT group_id FROM group_stores WHERE shop=?').get(`store${rejected}.myshopify.com`).group_id,'group'+rejected);
     await assert.rejects(createPairingCode(db,'group0'),error=>error.status===409);
   } finally { sqlite.close(); }
 });
