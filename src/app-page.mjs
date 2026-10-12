@@ -1,3 +1,4 @@
+import { planCss, planHtml, planScript } from './plan-page.mjs';
 import { safetyNetHtml, safetyNetScript } from './inventory-safety-net-page.mjs';
 import { setupGuideCss, setupGuideHtml, setupGuideScript } from './setup-guide.mjs';
 import { inventorySettingsHtml, inventorySettingsCss, inventorySettingsScript, activityExportHtml } from './inventory-settings-page.mjs';
@@ -24,21 +25,23 @@ ul{padding-left:20px;color:#334b43}li{margin:6px 0}.small{font-size:12px;color:#
 @media(max-width:640px){.cards,.page-links{grid-template-columns:1fr}header{display:block}main{padding:20px 14px 50px}.activity-toolbar{flex-wrap:wrap}.activity-entry{grid-template-columns:1fr auto}.activity-entry .activity-badge{grid-column:1/-1}.activity-head{align-items:flex-start;flex-direction:column}}
 ${setupGuideCss}
 ${inventorySettingsCss}
-${productCss}</style></head><body>
+${productCss}
+${planCss}</style></head><body>
 <s-app-nav>
 <s-link href="/" rel="home">Home</s-link>
 <s-link href="/inventory">Inventory Synchronization</s-link>
 <s-link href="/products">Product Synchronization</s-link>
+<s-link href="/plan">Plan</s-link>
 </s-app-nav>
 <main>
 <header><div><div class="eyebrow">OnlineSync</div><h1 id="pageTitle">Home</h1><p id="pageDescription">Connect your stores and manage your synchronization settings.</p></div><button id="refresh" class="secondary">Refresh</button></header>
-<nav class="app-nav" aria-label="OnlineSync pages"><a data-page="home" href="/" aria-current="page">Home</a><a data-page="inventory" href="/inventory">Inventory Synchronization</a><a data-page="products" href="/products">Product Synchronization</a></nav>
+<nav class="app-nav" aria-label="OnlineSync pages"><a data-page="home" href="/" aria-current="page">Home</a><a data-page="inventory" href="/inventory">Inventory Synchronization</a><a data-page="products" href="/products">Product Synchronization</a><a data-page="plan" href="/plan">Plan</a></nav>
 <div id="message" class="notice">Connecting to Shopify…</div>
 <div data-page-view="home">
 ${setupGuideHtml}
 <div class="cards" id="overviewCards"><div class="card"><div class="label">Synchronization status</div><div class="value" id="state">—</div></div><div class="card"><div class="label">Connected stores</div><div class="value" id="storesCount">—</div></div><div class="card"><div class="label">Matching SKUs</div><div class="value" id="links">—</div></div><div class="card"><div class="label">Requires review</div><div class="value" id="blocked">—</div></div></div>
 <section class="panel" id="storesPanel"><h2>Your store group</h2><p id="mainStore">Loading…</p><div class="store-table-wrap"><table class="store-table"><thead><tr><th>Role</th><th>Store name</th><th>Connection</th><th></th></tr></thead><tbody id="stores"></tbody></table></div><p class="small">Names are shared across this group. The main store can rename all stores; each connected store can rename itself. Leave a name empty to use its Shopify store handle.</p><p class="small">Connect up to four stores: one main store and three additional stores. The main store supplies the starting quantity. Later sales in any connected store reduce the same shared stock pool.</p></section>
-<section class="panel" id="billingPanel"><h2>Subscription</h2><p id="billing">Checking subscription…</p><a id="plans" hidden target="_top" rel="noopener">Choose a plan in Shopify</a><p class="small">Your main store’s subscription covers this store group. Manage live inventory synchronization on <a data-page="inventory" href="/inventory">Inventory Synchronization</a>.</p></section>
+
 <section class="panel" id="locationPanel"><h2>Choose this store's inventory location</h2><p>Choose the location whose available quantity should be shared.</p><div class="row"><select id="location"><option value="">Loading locations…</option></select><button id="saveLocation">Save location</button></div></section>
 <section class="panel" id="pairPanel"><h2>Connect another store</h2><p>Connect each additional store with its own pairing code.</p><p id="pairCapacity" class="small"></p><div class="row"><button id="makeCode">Create pairing code</button><code id="pairCode" hidden></code></div><div class="row"><input id="joinCode" placeholder="Code from main store" maxlength="24" autocomplete="off"><button id="join">Join group</button></div><p class="small">Codes expire after 10 minutes and can be used once. Connect all stores before starting the initial synchronization; adding a store clears the previous stock preview.</p></section>
 <div class="page-links"><a class="page-link" data-page="inventory" href="/inventory"><strong>Inventory synchronization</strong><span>Manage SKU rules, prepare quantities and review inventory activity.</span></a><a class="page-link" data-page="products" href="/products"><strong>Product synchronization</strong><span>Choose product fields, set price rules and review product copies.</span></a></div>
@@ -48,6 +51,7 @@ ${inventorySettingsHtml}
 
 <section class="panel" id="reviewPanel" hidden><h2>Inventory needs review</h2><p>Pause synchronization, check sales and stock changes in every store, and correct the main store's quantity if needed. Prepare a new preview below to use that main quantity as the starting stock. Resuming will copy it to the other stores.</p><div id="reviewLinks"></div><div id="reviewPreview" class="sample"></div></section>
 </div>
+<div data-page-view="plan" hidden>${planHtml}</div>
 <div data-page-view="products" hidden>
 ${productHtml}
 </div>
@@ -61,9 +65,9 @@ function storeLabel(shop){const member=current?.stores.find(s=>s.shop===shop);re
 function storeText(text){let value=String(text);for(const member of current?.stores||[])value=value.replaceAll(member.shop,()=>storeLabel(member.shop));return value}
 function labelStore(node,shop,suffix=''){node.dataset.storeLabel=shop;node.dataset.storeSuffix=suffix;node.textContent=storeLabel(shop)+suffix;return node}
 function refreshStoreLabels(){for(const node of document.querySelectorAll('[data-store-label]'))node.textContent=storeLabel(node.dataset.storeLabel)+(node.dataset.storeSuffix||'')}
-const appPages={home:{path:'/',title:'Home',description:'Connect your stores and manage your synchronization settings.'},inventory:{path:'/inventory',title:'Inventory synchronization',description:'Choose automatic matching, manage SKU rules and review inventory activity.'},products:{path:'/products',title:'Product synchronization',description:'Choose product fields, configure price rules and review product copies.'}};
+const appPages={plan:{path:'/plan',title:'Plan',description:'View your subscription, compare billing options and find answers.'},home:{path:'/',title:'Home',description:'Connect your stores and manage your synchronization settings.'},inventory:{path:'/inventory',title:'Inventory synchronization',description:'Choose automatic matching, manage SKU rules and review inventory activity.'},products:{path:'/products',title:'Product synchronization',description:'Choose product fields, configure price rules and review product copies.'}};
 let activePage=Object.keys(appPages).find(page=>appPages[page].path===location.pathname)||'home';
-function showPage(page,navigate=false){if(!appPages[page])page='home';activePage=page;$("activityPanel").dataset.page=page;for(const view of document.querySelectorAll('[data-page-view]'))view.hidden=view.dataset.pageView!==page;for(const link of document.querySelectorAll('nav [data-page]')){if(link.dataset.page===page)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current')}for(const link of document.querySelectorAll('a[data-page]'))link.href=appPages[link.dataset.page].path+location.search;$('pageTitle').textContent=appPages[page].title;$('pageDescription').textContent=appPages[page].description;document.title=appPages[page].title+' · OnlineSync';$('overviewCards').hidden=page!=='home';$('activityPanel').hidden=page==='home';$('activityExportPanel').hidden=page==='home';$('safetyNetPanel').hidden=page!=='inventory';$('activityExportKind').value=page==='products'?'products':'inventory';$('message').hidden=!$('message').textContent||(page==='products'&&$('message').className!=='error');$('activityTitle').textContent=page==='products'?'Product activity':'Inventory activity';document.querySelector('[data-activity-filter="changes"]').hidden=page==='products';if(navigate){history.pushState({},'',appPages[page].path+location.search);window.scrollTo(0,0)}if(current){renderActivity();if(page==='products'&&!productSettingsLoaded)loadProductSettings();if(page==='inventory'&&!inventorySettingsLoaded)loadInventorySettings()}}
+function showPage(page,navigate=false){if(!appPages[page])page='home';activePage=page;$("activityPanel").dataset.page=page;for(const view of document.querySelectorAll('[data-page-view]'))view.hidden=view.dataset.pageView!==page;for(const link of document.querySelectorAll('nav [data-page]')){if(link.dataset.page===page)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current')}for(const link of document.querySelectorAll('a[data-page]'))link.href=appPages[link.dataset.page].path+location.search;$('pageTitle').textContent=appPages[page].title;$('pageDescription').textContent=appPages[page].description;document.title=appPages[page].title+' · OnlineSync';$('overviewCards').hidden=page!=='home';$('activityPanel').hidden=!['inventory','products'].includes(page);$('activityExportPanel').hidden=!['inventory','products'].includes(page);$('safetyNetPanel').hidden=page!=='inventory';$('activityExportKind').value=page==='products'?'products':'inventory';$('message').hidden=!$('message').textContent||(page==='products'&&$('message').className!=='error');$('activityTitle').textContent=page==='products'?'Product activity':'Inventory activity';document.querySelector('[data-activity-filter="changes"]').hidden=page==='products';if(navigate){history.pushState({},'',appPages[page].path+location.search);window.scrollTo(0,0)}if(current){renderActivity();if(page==='plan')renderPlan(current);if(page==='products'&&!productSettingsLoaded)loadProductSettings();if(page==='inventory'&&!inventorySettingsLoaded)loadInventorySettings()}}
 for(const link of document.querySelectorAll('a[data-page]'))link.onclick=event=>{if(event.button!==0||event.ctrlKey||event.metaKey||event.shiftKey||event.altKey)return;event.preventDefault();showPage(link.dataset.page,true)};
 window.addEventListener('popstate',()=>showPage(Object.keys(appPages).find(page=>appPages[page].path===location.pathname)||'home'));
 let activityFilter='all';
@@ -88,21 +92,18 @@ function render(data){
   $('pairPanel').querySelector('p').textContent=data.group.role==='main'?'Install OnlineSync in each additional store. Create a separate code here for each store, then enter it in that store’s app.':'Enter the code shown in your main store’s app.';
   const maxStores=data.maxStores??4;
   $('pairCapacity').textContent=data.stores.length+' of '+maxStores+' stores connected'+(data.stores.length>=maxStores?' · Group is full':!data.canPair&&data.group.role==='main'?' · Connections are locked after the initial synchronization starts':'');
-  const billing=data.group.billing;
-  $('billing').textContent=billing.state==='active'?'Subscription active':billing.state==='plan_required'?'Choose a Shopify plan to enable synchronization':billing.state==='not_configured'?'Subscription setup is pending':'Subscription status unavailable';
-  const plans=$('plans');plans.hidden=!billing.planUrl;if(billing.planUrl)plans.href=billing.planUrl;
   $('pause').disabled=data.group.role!=='main'||data.group.status!=='active';
   $('reviewPanel').hidden=!data.blocked&&!data.pendingPreview?.length;
   const review=$('reviewLinks');review.replaceChildren();
   for(const link of data.blockedLinks||[]){const row=document.createElement('div');row.className='row';const label=document.createElement('p');label.textContent=link.sku+' · '+link.block_reason;const button=document.createElement('button');button.textContent='Prepare new preview for '+link.sku;button.disabled=data.group.role!=='main'||data.group.status!=='paused';button.onclick=()=>reviewConflict(link.id,button);row.append(label,button);review.append(row)}
   const reviewed=$('reviewPreview');reviewed.replaceChildren();
   for(const item of data.pendingPreview||[]){const row=document.createElement('div');row.textContent=item.sku+' · '+storeLabel(item.shop)+' · '+item.last_quantity+' → '+item.target_quantity;reviewed.append(row)}
-  renderSetupGuide(data);renderSafetyNet(data);
+  renderSetupGuide(data);renderSafetyNet(data);renderPlan(data);
   renderActivity();$('activityUpdated').textContent='Updated '+new Date().toLocaleTimeString();
 }
 async function load(){try{const data=await api('/api/bootstrap','POST');render(data);const loc=await api('/api/locations');const select=$('location');select.replaceChildren();for(const l of loc.locations){const option=document.createElement('option');option.value=l.id;option.textContent=l.name+(l.isActive?'':' (inactive)');option.disabled=!l.isActive;option.selected=data.stores.find(s=>s.shop===data.currentShop)?.location_id===l.id;select.append(option)}if(!select.value&&loc.locations.length)select.value=loc.locations.find(l=>l.isActive)?.id||'';if(data.stores.some(s=>s.uninstalled_at))message('Synchronization is paused because a connected store uninstalled OnlineSync. Reinstall and reopen the app there before resuming.');else if(data.blocked)message('Some SKUs need review. Pause synchronization and prepare a corrected preview on Inventory synchronization.');else if(data.group.status==='active')message('','ok');else if(data.group.status==='paused')message('Synchronization is paused. Select On on the Inventory synchronization page to resume.');else message('Connected. Choose locations, then turn inventory synchronization On.','ok')}catch(e){message(e.message,'error')}}
 async function reviewConflict(linkId,button){button.disabled=true;try{const result=await api('/api/conflict-preview','POST',{linkId});const preview=$('reviewPreview');preview.replaceChildren();for(const store of result.stores){const row=document.createElement('div');row.textContent=result.sku+' · '+storeLabel(store.shop)+' · '+store.quantity+' → '+store.targetQuantity;preview.append(row)}render(await api('/api/status'));$('reviewPanel').hidden=false;message('New preview prepared. Inventory quantities have not changed. Review the quantities, then resume synchronization to apply the main-store baseline.','notice')}catch(e){button.disabled=false;message(e.message,'error')}}
-$('refresh').onclick=load;
+$('refresh').onclick=()=>{if(activePage==='plan')planDetailsLoadedAt=0;return load()};
 $('activitySearch').oninput=renderActivity;
 for(const button of document.querySelectorAll('[data-activity-filter]'))button.onclick=()=>{activityFilter=button.dataset.activityFilter;for(const tab of document.querySelectorAll('[data-activity-filter]')){const selected=tab===button;tab.classList.toggle('active',selected);tab.setAttribute('aria-pressed',String(selected))}renderActivity()};
 $('saveLocation').onclick=async()=>{try{render(await api('/api/location','POST',{locationId:$('location').value}));message('Location saved.','ok')}catch(e){message(e.message,'error')}};
@@ -114,6 +115,7 @@ ${setupGuideScript()}
 ${productScript()}
 ${inventorySettingsScript()}
 ${safetyNetScript()}
+${planScript()}
 showPage(activePage);
 load();
 </script></body></html>`;

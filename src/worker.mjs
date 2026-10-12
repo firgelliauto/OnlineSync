@@ -229,6 +229,11 @@ async function merchantApi(request, env, path) {
       return json(await runSafetyNet(db,group,env));
     }
     if (path === '/api/status' && request.method === 'GET') return json(await status(db, user.shop, env));
+    if (path === '/api/plan' && request.method === 'GET') {
+      const billing=await activeSubscription(db,group.main_shop,env,{force:true});
+      const main=await db.prepare('SELECT is_development FROM stores WHERE shop=?').bind(group.main_shop).first();
+      return json({billing,isDevelopment:main?.is_development===1});
+    }
     if (path === '/api/inventory-settings' && request.method === 'GET') return json(await inventorySettings(db,group.id));
     if (path === '/api/inventory-settings' && request.method === 'POST') return json(await saveInventorySettings(db,group,await request.json()));
     if (path === '/api/inventory-section' && request.method === 'POST') return json(await setInventorySection(db,group,await request.json()));
@@ -428,7 +433,7 @@ export default {
     }
     if (url.pathname === '/health') return json({ status: 'ok',
       inventoryWritesEnabled: env.INVENTORY_WRITES_ENABLED === 'true' });
-    if (['/', '/inventory', '/products'].includes(url.pathname) && request.method === 'GET') {
+    if (['/', '/inventory', '/products', '/plan'].includes(url.pathname) && request.method === 'GET') {
       if (!env.SHOPIFY_CLIENT_ID) return new Response('Set SHOPIFY_CLIENT_ID', { status: 503 });
       return new Response(appPage(env.SHOPIFY_CLIENT_ID), { headers: {
         'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',

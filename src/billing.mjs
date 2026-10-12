@@ -58,7 +58,10 @@ async function checkSubscription(db, mainShop, env, { force }) {
     signal: AbortSignal.timeout(20_000),
     body: JSON.stringify({
       query: `query ActiveSubscription($appId: ID!, $shopId: ID!) {
-        activeSubscription(appId: $appId, shopId: $shopId) { billingPeriod trialEndsAt }
+        activeSubscription(appId: $appId, shopId: $shopId) {
+          billingPeriod trialEndsAt cancelAtEndOfCycle currentBillingCycle { endTime }
+          items { handle description price { active currency ... on FlatRatePrice { amount } } }
+        }
       }`, variables: { appId: env.SHOPIFY_APP_GID, shopId: row.shopify_shop_id }
     })
   });
@@ -71,7 +74,12 @@ async function checkSubscription(db, mainShop, env, { force }) {
       result.data?.activeSubscription?.trialEndsAt ?? null, mainShop).run();
   return active ? { state: 'active', active: true,
     billingPeriod: result.data.activeSubscription.billingPeriod,
-    trialEndsAt: result.data.activeSubscription.trialEndsAt } :
+    trialEndsAt: result.data.activeSubscription.trialEndsAt,
+    cancelAtEndOfCycle: Boolean(result.data.activeSubscription.cancelAtEndOfCycle),
+    cycleEndsAt: result.data.activeSubscription.currentBillingCycle?.endTime ?? null,
+    items: (result.data.activeSubscription.items ?? []).map(item=>({handle:item.handle,description:item.description,
+      amount:item.price?.amount??null,currency:item.price?.currency??null,active:item.price?.active!==false})),
+    planUrl: `https://admin.shopify.com/store/${encodeURIComponent(mainShop.split('.')[0])}/charges/${encodeURIComponent(env.SHOPIFY_APP_HANDLE)}/pricing_plans` } :
     { state: 'plan_required', active: false,
       planUrl: `https://admin.shopify.com/store/${encodeURIComponent(mainShop.split('.')[0])}/charges/${encodeURIComponent(env.SHOPIFY_APP_HANDLE)}/pricing_plans` };
 }
