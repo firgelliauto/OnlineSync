@@ -174,7 +174,7 @@ export async function processLink(env, linkId) {
       await block(db, link, 'A connected store was uninstalled');
       return { retry: false };
     }
-    await checkLiveSelection(db,link,members.find(m=>m.shop===link.main_shop),env);
+    await checkLiveSelection(db,link,members.find(m=>m.shop===link.main_shop),env,members);
     const pending = await db.prepare('SELECT 1 AS found FROM sync_writes WHERE link_id = ? LIMIT 1')
       .bind(linkId).first();
     if (pending) {

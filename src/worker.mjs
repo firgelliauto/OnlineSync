@@ -18,6 +18,8 @@ import { prepareConflictPreview } from './conflicts.mjs';
 import { inventoryPage } from './inventory-view.mjs';
 import { heartbeat, recordIssue, resolveIssue } from './operations.mjs';
 import { productSettings, saveProductSettings, previewProduct, applyProductPreview, queueProduct, processProductJob, queueProductCatalog } from './product-sync.mjs';
+import { saveProductInclusion } from './product-sync.mjs';
+import { productCollections } from './product-inclusion.mjs';
 
 const json = (data, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
 const invalidSession = () => new Response(JSON.stringify({ error: 'Invalid Shopify session' }), {
@@ -109,7 +111,7 @@ async function preview(db, group, env) {
   const children = members.filter(m => m.role === 'child');
   const settings = await inventorySettings(db,group.id);
   const [source, ...targets] = await Promise.all(members.map(m =>
-    listEligibleVariants(db, m.shop, m.location_id, env, m.role==='main')));
+    listEligibleVariants(db, m.shop, m.location_id, env, true)));
   await populateCollections(db,group.main_shop,env,source,settings);
   const matches = inventoryMatches(source, targets, children.map(m=>m.shop), settings, group.main_shop);
   if (matches.length > 10000) return json({ error: 'Catalog exceeds current preview limit' }, 413);
@@ -261,6 +263,18 @@ async function merchantApi(request, env, path) {
       return json(await status(db, user.shop, env));
     }
     if (path === '/api/product-settings' && request.method === 'GET') return json(await productSettings(db,group.id));
+    if(path==='/api/product-inclusion'&&request.method==='POST')return json(await saveProductInclusion(db,group,await request.json()));
+    if(path==='/api/product-collections'&&request.method==='GET')return json(await productCollections(db,group.main_shop,env));
+    if(path==='/api/product-inclusion/run'&&request.method==='POST'){
+      if(group.role!=='main')return json({error:'Open the main store to synchronize products'},403);
+      const settings=await productSettings(db,group.id);if(!settings.fields.length)return json({error:'Save at least one product field before synchronizing'},409);
+      if(!settings.inclusion.enabled)return json({error:'Turn On product inclusion rules before using this Synchronize now button'},409);
+      if(!settings.inclusion.tags.length&&!settings.inclusion.productTypes.length&&!settings.inclusion.collections.length&&!settings.inclusion.readyTag)return json({error:'Add an inclusion tag, product type, collection or ready-to-sync tag first'},409);
+      if(!shopsAllowedToWrite(env,(await db.prepare('SELECT shop FROM group_stores WHERE group_id=?').bind(group.id).all()).results.map(s=>s.shop))||env.PRODUCT_WRITES_ENABLED!=='true')return json({error:'Product writes are unavailable for this group'},409);
+      if(!(await activeSubscription(db,group.main_shop,env,{force:true})).active)return json({error:'An active main-store subscription is required'},402);
+      await queueProductCatalog(env,group.id,'',{manual:true,revision:settings.revision});
+      await db.prepare(`INSERT INTO sync_events(group_id,shop,event_type,detail) VALUES (?,?,'product_sync_requested','Manual product synchronization queued using saved inclusion rules. Results and errors appear in Product activity.')`).bind(group.id,group.main_shop).run();return json({ok:true});
+    }
     if (path === '/api/product-access' && request.method === 'POST') {
       await saveToken(db,user.shop,await exchangeOfflineToken(user.shop,idToken,env),env);
       return json({ok:true});

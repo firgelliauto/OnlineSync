@@ -6,7 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { encrypt } from '../src/security.mjs';
 import {adjustedPrice} from '../src/price-rules.mjs';
 import {createDraft} from '../src/product-drafts.mjs';
-import { draftPlan,productPlan,selectedFields,saveProductSettings,previewProduct,applyProductPreview,queueProduct,processProductJob } from '../src/product-sync.mjs';
+import { draftPlan,productPlan,selectedFields,saveProductSettings,saveProductInclusion,productSettings,previewProduct,applyProductPreview,queueProduct,queueProductCatalog,processProductJob } from '../src/product-sync.mjs';
 
 function adapter(sqlite){return {prepare(sql){const make=values=>({run:async()=>({meta:{changes:Number(sqlite.prepare(sql).run(...values).changes)}}),first:async()=>sqlite.prepare(sql).get(...values)??null,all:async()=>({results:sqlite.prepare(sql).all(...values)})});return {...make([]),bind:(...values)=>make(values)}},async batch(statements){sqlite.exec('BEGIN');try{const result=[];for(const s of statements)result.push(await s.run());sqlite.exec('COMMIT');return result}catch(e){sqlite.exec('ROLLBACK');throw e}}}}
 function product(id,title='Main title'){return {id,title,handle:'keep-this-url',descriptionHtml:'<p>Main description</p>',vendor:'Vendor',productType:'Type',tags:['b','a'],seo:{title:'SEO',description:'Search text'},currency:'USD',
@@ -28,6 +28,8 @@ async function fixture(count=2){
     if(query.includes('query DraftHandle'))return Response.json({data:{productByIdentifier:p?.handle===variables.handle?{...p,variants:{nodes:p.variants,pageInfo:{hasNextPage:false}}}:null}});
     if(query.includes('mutation CreateSyncDraft')){writes.push({shop,...variables});const input=variables.input;const created={...product('gid://shopify/Product/999'),...input,currency:'USD',media:[],options:input.productOptions.map((o,i)=>({...o,id:'new-option-'+i,optionValues:o.values})),variants:input.variants.map((v,i)=>({...v,id:'new-variant-'+i,selectedOptions:v.optionValues.map(o=>({name:o.optionName,value:o.name}))}))};products.set(shop,created);if(failure.once){failure.once=false;throw Error('Response lost after draft creation')}return Response.json({data:{productSet:{product:{id:created.id,status:created.status},userErrors:[]}}});}
     if(query.includes('query SyncProduct'))return Response.json({data:{shop:{currencyCode:p.currency},product:{...p,variants:{nodes:p.variants,pageInfo:{hasNextPage:false}},media:{nodes:p.media,pageInfo:{hasNextPage:false}}}}});
+    if(query.includes('query ProductInclusion'))return Response.json({data:{product:{c0:Boolean(failure.collectionMember)}}});
+    if(query.includes('query ProductScan'))return Response.json({data:{products:{nodes:[{id:p.id}],pageInfo:{hasNextPage:false}}}});
     if(query.includes('query ProductScopes'))return Response.json({data:{currentAppInstallation:{accessScopes:[{handle:'write_products'},{handle:'read_files'}]}}});
     if(query.includes('query ExistingSyncImage'))return Response.json({data:{files:{nodes:[]}}});
     if(query.includes('mutation SyncProductFields')){writes.push({shop,...variables});const {input}=variables;
@@ -40,6 +42,21 @@ async function fixture(count=2){
   };
   return {db,sqlite,shops,products,writes,sent,env,failure,group:{id:'group',main_shop:shops[0],role:'main'},close(){globalThis.fetch=originalFetch;sqlite.close()}};
 }
+test('ready tags gate manual previews and automatic jobs; manual catalog works with automatic Off',async()=>{
+ const f=await fixture();try{
+  await saveProductSettings(f.db,f.group,['title'],false,{});
+  await saveProductInclusion(f.db,f.group,{enabled:true,tags:['a'],readyTag:'Ready'});
+  await assert.rejects(previewProduct(f.db,f.group,'SKU-0',f.env),/ready-to-sync/);
+  const settings=await productSettings(f.db,f.group.id);
+  await queueProduct(f.env,f.group.id,f.products.get(f.shops[0]).id,{manual:true,revision:settings.revision});const excludedId=f.sent.at(-1).productJobId;await processProductJob(f.env,excludedId);assert.equal(f.writes.length,0);
+  f.products.get(f.shops[0]).tags.push('Ready');
+  await queueProductCatalog(f.env,f.group.id,'',{manual:true,revision:settings.revision});await processProductJob(f.env,f.sent.at(-1).productJobId);const productJob=f.sent.at(-1).productJobId;assert.match(productJob,/manual:/);await processProductJob(f.env,productJob);assert.equal(f.writes.length,1);assert.equal(f.products.get(f.shops[1]).title,'Main title');
+  const preview=await previewProduct(f.db,f.group,'SKU-0',f.env);f.products.get(f.shops[0]).tags=['a'];await assert.rejects(applyProductPreview(f.db,f.group,preview.id,f.env),/ready-to-sync/);
+ }finally{f.close()}
+});
+test('collection filter membership is required and rule edits invalidate queued manual work',async()=>{
+ const f=await fixture();try{await saveProductSettings(f.db,f.group,['title'],false,{});await saveProductInclusion(f.db,f.group,{enabled:true,collections:['gid://shopify/Collection/1'],readyTag:'a'});await assert.rejects(previewProduct(f.db,f.group,'SKU-0',f.env),/inclusion/);f.failure.collectionMember=true;await previewProduct(f.db,f.group,'SKU-0',f.env);const settings=await productSettings(f.db,f.group.id);await queueProduct(f.env,f.group.id,f.products.get(f.shops[0]).id,{manual:true,revision:settings.revision});const id=f.sent.at(-1).productJobId;await saveProductInclusion(f.db,f.group,{enabled:true,tags:['different']});await processProductJob(f.env,id);assert.equal(f.writes.length,0)}finally{f.close()}
+});
 test('price-only plan excludes every unchecked product field and rejects cross-currency prices',async()=>{
   const source=product('source'),target=product('target','Local');target.variants.forEach(v=>v.price='1.00');
   const plan=await productPlan(source,target,['price']);assert.deepEqual(plan.input,{});assert.ok(plan.variants.every(v=>Object.keys(v).sort().join(',')==='id,price'));assert.equal(plan.changes.length,2);

@@ -22,6 +22,7 @@ test('20 SKUs across three stores: exclusions, 15 manual aliases, initial stock,
    if(query.includes('query Variants'))return Response.json({data:{productVariants:{nodes:catalogs[index],pageInfo:{hasNextPage:false}}}});
    const v=catalogs[index]?.find(v=>v.inventoryItem.id===(variables.item||variables.id));
    if(query.includes('query InventorySelection'))return Response.json({data:{inventoryItem:{variants:{nodes:[{product:v.product}]}}}});
+   if(query.includes('query InventoryTagSelection'))return Response.json({data:{inventoryItem:{variants:{nodes:[{product:v.product}]}}}});
    if(query.includes('query Quantity'))return Response.json({data:{inventoryItem:{sku:v.sku,tracked:true,requiresShipping:true,duplicateSkuCount:0,variants:{nodes:[{inventoryPolicy:'DENY'}],pageInfo:{hasNextPage:false}},inventoryLevel:{quantities:[{name:'available',quantity:qty.get(shop+'|'+v.inventoryItem.id)}]}}}});
    if(query.includes('mutation SetQuantity')){const change=variables.input.quantities[0],id=shop+'|'+change.inventoryItemId;assert.equal(qty.get(id),change.changeFromQuantity);assert.ok(!seen.has(variables.key));seen.add(variables.key);qty.set(id,change.quantity);writes.push({shop,...change});return Response.json({data:{inventorySetQuantities:{userErrors:[],inventoryAdjustmentGroup:{createdAt:new Date().toISOString()}}}})}throw Error('Unexpected query '+query)};
   const base64=v=>Buffer.from(JSON.stringify(v)).toString('base64url'),body=base64({alg:'HS256'})+'.'+base64({aud:'client',iss:'https://'+shops[0]+'/admin',dest:'https://'+shops[0],sub:'123',nbf:now-1,exp:now+120});const token=body+'.'+createHmac('sha256','secret').update(body).digest('base64url');
@@ -55,5 +56,6 @@ test('20 SKUs across three stores: exclusions, 15 manual aliases, initial stock,
   qty.set(mappedId,qty.get(mappedId)-1);await processLink(env,mappedLink.id);assert.equal(writes.length,mappedBefore+2);assert.equal(sql.prepare('SELECT status FROM inventory_links WHERE id=?').get(mappedLink.id).status,'active');
   sql.prepare('UPDATE inventory_settings SET settings=? WHERE group_id=?').run(JSON.stringify(settings),'g');
   const protectedLink=links[0],before=writes.length;catalogs[0][0].product.tags=['outside'];const mainId=shops[0]+'|'+catalogs[0][0].inventoryItem.id;qty.set(mainId,qty.get(mainId)-1);await processLink(env,protectedLink.id);assert.equal(writes.length,before);assert.equal(sql.prepare('SELECT status FROM inventory_links WHERE id=?').get(protectedLink.id).status,'blocked');
+  const taggedLink=links[1];catalogs[1][1].product.tags=['outside'];await processLink(env,taggedLink.id);assert.equal(writes.length,before);assert.equal(sql.prepare('SELECT status FROM inventory_links WHERE id=?').get(taggedLink.id).status,'blocked');
  }finally{globalThis.fetch=originalFetch;sql.close()}
 });

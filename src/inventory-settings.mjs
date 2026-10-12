@@ -2,18 +2,21 @@ import { listEligibleVariants, matchingCatalogs } from './catalog.mjs';
 import { adminGraphql } from './shopify.mjs';
 
 const fail = (message, status = 409) => { throw Object.assign(new Error(message), { status }); };
-export const defaults = () => ({ mode: 'all', includesEnabled: true, excludesEnabled: true, mappingsEnabled: true, includedSkus: [], includedTags: [], includedCollections: [], excludedSkus: [], excludedTags: [], excludedCollections: [], mappings: [] });
+export const defaults = () => ({ mode: 'all', includesEnabled: true, excludesEnabled: true, mappingsEnabled: true, tagsEnabled:true,collectionsEnabled:true, includedSkus: [], includedTags: [], includedCollections: [], excludedSkus: [], excludedTags: [], excludedCollections: [], mappings: [] });
 export function effectiveInventorySettings(settings) {
   const active = { ...defaults(), ...settings };
-  if (!active.includesEnabled) for (const field of ['Skus','Tags','Collections']) active['included'+field]=[];
+  if (!active.includesEnabled) active.includedSkus=[];
+  if(!active.tagsEnabled)active.includedTags=[];
+  if(!active.collectionsEnabled)active.includedCollections=[];
   if (!active.excludesEnabled) for (const field of ['Skus','Tags','Collections']) active['excluded'+field]=[];
   if (!active.mappingsEnabled) active.mappings=[];
   return active;
 }
 export async function inventorySettings(db, groupId) {
   const row = await db.prepare('SELECT settings FROM inventory_settings WHERE group_id=?').bind(groupId).first();
-  return row ? { ...defaults(), ...JSON.parse(row.settings) } : defaults();
+  if(!row)return defaults();const saved=JSON.parse(row.settings);return {...defaults(),...saved,tagsEnabled:saved.tagsEnabled??saved.includesEnabled!==false,collectionsEnabled:saved.collectionsEnabled??saved.includesEnabled!==false};
 }
+export function sharedInventoryTag(source,children,tags){const has=(v,t)=>(v.tags||[]).some(tag=>tag.toLowerCase()===t.toLowerCase());return !tags.some(t=>has(source,t))||tags.some(t=>has(source,t)&&children.every(v=>has(v,t)))}
 export function selectedInventory(variant, settings, manuallyMapped = false) {
   settings=effectiveInventorySettings(settings);
   const any = prefix => settings[prefix+'Skus'].includes(variant.sku) ||
@@ -68,14 +71,14 @@ export function inventoryMatches(source, targets, shops, settings, mainShop = '_
     }
   }
   for(const canonical of assignments.keys())if(selected.has(canonical)&&!matches.some(row=>row.sku===canonical))fail('A mapped product is missing in another connected store. Add a mapping for that store before previewing.');
-  return matches;
+  return matches.filter(row=>sharedInventoryTag(row.source,row.children,settings.includedTags));
 }
 export function validateSettings(input, shops, mainShop = '__main__') {
   if (!input || !['all','selected'].includes(input.mode)) fail('Choose all products or selected products',400);
   const result = defaults(); result.mode=input.mode;
-  for(const key of ['includesEnabled','excludesEnabled','mappingsEnabled']){
+  for(const key of ['includesEnabled','excludesEnabled','mappingsEnabled','tagsEnabled','collectionsEnabled']){
     if(input[key]!==undefined&&typeof input[key]!=='boolean')fail('Rule switches must be On or Off',400);
-    result[key]=input[key]??true;
+    result[key]=input[key]??(['tagsEnabled','collectionsEnabled'].includes(key)?input.includesEnabled!==false:true);
   }
   for (const key of ['includedSkus','includedTags','includedCollections','excludedSkus','excludedTags','excludedCollections']) {
     const values=input[key]??[];
@@ -124,9 +127,9 @@ export async function populateCollections(db,shop,env,source,settings) {
     } while(true);
   }
 }
-export async function checkLiveSelection(db,link,mainMember,env) {
+export async function checkLiveSelection(db,link,mainMember,env,members=[]) {
   const settings=effectiveInventorySettings(await inventorySettings(db,link.group_id));
-  if(settings.mode==='all'&&!settings.excludedSkus.length&&!settings.excludedTags.length&&!settings.excludedCollections.length)return;
+  if(settings.mode==='all'&&!settings.includedTags.length&&!settings.excludedSkus.length&&!settings.excludedTags.length&&!settings.excludedCollections.length)return;
   const ids=[...new Set([...settings.includedCollections,...settings.excludedCollections])];
   const fields=ids.map((id,index)=>`c${index}: inCollection(id:${JSON.stringify(id)})`).join(' ');
   const data=await adminGraphql(db,mainMember.shop,env,`query InventorySelection($id:ID!){inventoryItem(id:$id){variants(first:2){nodes{product{id tags ${fields}}}}}}`,{id:mainMember.inventory_item_id});
@@ -134,6 +137,7 @@ export async function checkLiveSelection(db,link,mainMember,env) {
   if(!products.length || products.some(product=>!selectedInventory({sku:link.sku,tags:product.tags,collections:ids.filter((id,index)=>product['c'+index]).map(id=>({id}))},settings,!!link.manually_mapped))) {
     throw Object.assign(new Error('Main-store product no longer matches the inventory selection. Review exclusions before resuming this SKU.'),{fatal:true});
   }
+  if(settings.includedTags.some(t=>(products[0].tags||[]).some(tag=>tag.toLowerCase()===t.toLowerCase()))){const targets=[];for(const member of members.filter(m=>m.shop!==mainMember.shop)){const data=await adminGraphql(db,member.shop,env,`query InventoryTagSelection($id:ID!){inventoryItem(id:$id){variants(first:2){nodes{product{tags}}}}}`,{id:member.inventory_item_id});const product=data.inventoryItem?.variants?.nodes?.[0]?.product;if(!product)throw Object.assign(new Error('Tagged inventory product is unavailable in a connected store'),{fatal:true});targets.push(product)}if(!sharedInventoryTag(products[0],targets,settings.includedTags))throw Object.assign(new Error('The configured inventory tag must be present on the matching product in every store.'),{fatal:true})}
 }
 export async function saveInventorySettings(db, group, input) {
   if(group.role!=='main') fail('Open the main store to change inventory selections',403);
@@ -158,7 +162,7 @@ async function persistInventorySettings(db,group,settings) {
 
 export async function setInventorySection(db,group,input) {
   if(group.role!=='main')fail('Open the main store to change inventory rules',403);
-  const fields={automatic:'mode',included:'includesEnabled',excluded:'excludesEnabled',mappings:'mappingsEnabled'};
+  const fields={automatic:'mode',included:'includesEnabled',excluded:'excludesEnabled',mappings:'mappingsEnabled',tags:'tagsEnabled',collections:'collectionsEnabled'};
   if(!input||!Object.hasOwn(fields,input.section)||typeof input.enabled!=='boolean')fail('Choose a section and On or Off',400);
   return withInventoryLock(db,group,async()=>{
     // Read under the configuration lock; switches never consume unsaved form edits.

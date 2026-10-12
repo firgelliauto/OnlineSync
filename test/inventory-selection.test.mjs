@@ -4,6 +4,15 @@ import {defaults,selectedInventory,inventoryMatches,validateSettings,saveInvento
 import {csvCell,exportActivity} from '../src/activity-export.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync,readdirSync} from 'node:fs';
+test('tag matching requires a common configured tag in every store and remains independent of SKU includes',()=>{
+ const catalog=tags=>new Map([['A',{sku:'A',itemId:tags.join('-')||'none',tags,collections:[{id:'gid://shopify/Collection/1'}]}]]);
+ const settings={...defaults(),mode:'selected',includesEnabled:false,includedTags:['red','blue'],tagsEnabled:true};
+ assert.equal(inventoryMatches(catalog(['red','blue']),[catalog(['red']),catalog(['blue'])],['s2','s3'],settings,'main').length,0);
+ assert.equal(inventoryMatches(catalog(['red']),[catalog(['RED']),catalog(['red'])],['s2','s3'],settings,'main').length,1);
+ assert.equal(inventoryMatches(catalog(['red']),[catalog([]),catalog(['red'])],['s2','s3'],{...settings,mode:'all'},'main').length,0);
+ assert.equal(inventoryMatches(catalog(['red']),[catalog([]),catalog(['red'])],['s2','s3'],{...settings,mode:'all',tagsEnabled:false},'main').length,1);
+ const collections={...settings,includedTags:[],tagsEnabled:false,includedCollections:['gid://shopify/Collection/1'],collectionsEnabled:true};assert.equal(inventoryMatches(catalog([]),[catalog([]),catalog([])],['s2','s3'],collections,'main').length,1);assert.equal(inventoryMatches(catalog([]),[catalog([]),catalog([])],['s2','s3'],{...collections,collectionsEnabled:false},'main').length,0);
+});
 test('automatic matching off allows only explicit includes and manual mappings, with exclusions winning',()=>{
  const variants=values=>new Map(values.map(sku=>[sku,{sku,itemId:sku}]));
  const source=variants(['A','B','C']),targets=[variants(['A','B','C']),variants(['A','B','C'])],settings={...defaults(),mode:'selected'};

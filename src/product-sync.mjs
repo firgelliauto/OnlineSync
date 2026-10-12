@@ -1,4 +1,5 @@
 import { reserveSyncedSkus, assertSkuPlan } from './sku-plans.mjs';
+import { inclusionDefaults, normalizeInclusion, productIncluded } from './product-inclusion.mjs';
 import { adminGraphql } from './shopify.mjs';
 import { activeSubscription } from './billing.mjs';
 import { shopsAllowedToWrite } from './write-policy.mjs';
@@ -98,7 +99,14 @@ export async function draftPlan(source,fields,rule={}){
   for(const variant of input.variants)for(const field of fields.filter(f=>variantFields.has(f)))changes.push({field,sku:variant.sku,before:null,after:variant[field]});
   return {create:true,input,variants:[],changes};
 }
-export async function productSettings(db,groupId){const row=await db.prepare('SELECT * FROM product_sync_settings WHERE group_id=?').bind(groupId).first();return {fields:row?JSON.parse(row.fields):[],enabled:Boolean(row?.enabled),revision:row?.revision??0,priceRules:row?JSON.parse(row.price_rules):{}}}
+export async function productSettings(db,groupId){const row=await db.prepare('SELECT * FROM product_sync_settings WHERE group_id=?').bind(groupId).first();return {fields:row?JSON.parse(row.fields):[],enabled:Boolean(row?.enabled),revision:row?.revision??0,priceRules:row?JSON.parse(row.price_rules):{},inclusion:{...inclusionDefaults(),...JSON.parse(row?.inclusion||'{}')}}}
+export async function saveProductInclusion(db,group,input){
+ if(group.role!=='main')fail('Open the main store to change product inclusion rules',403);
+ const inclusion=normalizeInclusion(input);
+ await db.batch([db.prepare(`INSERT INTO product_sync_settings(group_id,fields,enabled,inclusion) VALUES (?,'[]',0,?) ON CONFLICT(group_id) DO UPDATE SET inclusion=excluded.inclusion,revision=revision+1,updated_at=CURRENT_TIMESTAMP`).bind(group.id,JSON.stringify(inclusion)),db.prepare('DELETE FROM product_sync_previews WHERE group_id=?').bind(group.id),db.prepare('UPDATE product_sync_jobs SET dirty=0 WHERE group_id=?').bind(group.id)]);
+ await productLog(db,group.id,group.main_shop,'product_inclusion','Product inclusion rules saved. No products changed.');
+ return productSettings(db,group.id);
+}
 export async function saveProductSettings(db,group,fields,enabled,priceRules){
   if(group.role!=='main')fail('Open the main store to change product sync settings',403);
   fields=selectedFields(fields);if(typeof enabled!=='boolean')fail('Choose whether automatic product sync is enabled',400);
@@ -115,8 +123,10 @@ export async function saveProductSettings(db,group,fields,enabled,priceRules){
   return productSettings(db,group.id);
 }
 async function connected(db,groupId){const members=(await db.prepare(`SELECT gs.shop,gs.role,s.uninstalled_at FROM group_stores gs JOIN stores s ON s.shop=gs.shop WHERE gs.group_id=? ORDER BY gs.role DESC,gs.shop`).bind(groupId).all()).results;if(members.length<2||members.length>4||members.some(s=>s.uninstalled_at))fail('Connect two to four installed stores first');return members}
-async function snapshot(db,group,sourceId,fields,env,{createMissing=false,offerMissing=false,priceRules={}}={}){
-  const members=await connected(db,group.id);const source=await readProduct(db,group.main_shop,sourceId,env);const skus=skuSet(source);
+async function snapshot(db,group,sourceId,fields,env,{createMissing=false,offerMissing=false,priceRules={},inclusion=inclusionDefaults(),skipExcluded=false}={}){
+  const members=await connected(db,group.id);const source=await readProduct(db,group.main_shop,sourceId,env);
+  if(!await productIncluded(db,group.main_shop,source,inclusion,env)){if(skipExcluded)return null;fail('This product does not match the saved inclusion rules or is missing its ready-to-sync tag');}
+  const skus=skuSet(source);
   const mainMatches=await variantsBySku(db,group.main_shop,skus,env);
   if(skus.some(s=>!mainMatches.get(s)||mainMatches.get(s).product.id!==sourceId))fail('Main-store SKUs are duplicated or changed');
   const targets=[];
@@ -144,7 +154,7 @@ export async function previewProduct(db,group,sku,env,createMissing=false){
   if(typeof createMissing!=='boolean')fail('Choose whether missing products should be created',400);
   const settings=await productSettings(db,group.id);if(!settings.fields.length)fail('Save your selected fields first');
   const matches=await variantsBySku(db,group.main_shop,[sku.trim()],env);const variant=matches.get(sku.trim());if(!variant)fail('Choose a unique main-store SKU');
-  const value=await snapshot(db,group,variant.product.id,settings.fields,env,{createMissing,offerMissing:true,priceRules:settings.priceRules});const id=crypto.randomUUID();
+  const value=await snapshot(db,group,variant.product.id,settings.fields,env,{createMissing,offerMissing:true,priceRules:settings.priceRules,inclusion:settings.inclusion});const id=crypto.randomUUID();
   const serialized=JSON.stringify(value);if(serialized.length>750000)fail('This product preview is too large',413);
   await db.prepare(`INSERT INTO product_sync_previews (id,group_id,revision,source_id,snapshot,expires_at,create_missing) VALUES (?,?,?,?,?,?,?)`).bind(id,group.id,settings.revision,variant.product.id,serialized,Math.floor(Date.now()/1000)+1200,Number(createMissing)).run();
   return publicPreview(id,value);
@@ -170,7 +180,7 @@ export async function applyProductPreview(db,group,id,env){
   const claimed=await db.prepare('UPDATE product_sync_previews SET lock_owner=?,lock_until=? WHERE id=? AND group_id=? AND (lock_owner IS NULL OR lock_until<=?)').bind(owner,now+1200,id,group.id,now).run();
   if(!claimed.meta.changes)fail('This preview is already being applied');
   try{
-  const fresh=await snapshot(db,group,row.source_id,settings.fields,env,{createMissing:Boolean(row.create_missing),offerMissing:true,priceRules:settings.priceRules});
+  const fresh=await snapshot(db,group,row.source_id,settings.fields,env,{createMissing:Boolean(row.create_missing),offerMissing:true,priceRules:settings.priceRules,inclusion:settings.inclusion});
   if(!same(JSON.parse(row.snapshot),fresh))fail('A product or connection changed since preview; prepare a new preview');
   await canWrite(db,group,fresh.members,env,settings.fields);
   await reserveSyncedSkus(db,group.id,'product',fresh.source.id,skuSet(fresh.source),await activeSubscription(db,group.main_shop,env));
@@ -186,15 +196,15 @@ export async function applyProductPreview(db,group,id,env){
   }finally{await db.prepare('UPDATE product_sync_previews SET lock_owner=NULL,lock_until=0 WHERE id=? AND lock_owner=?').bind(id,owner).run();}
 }
 async function productLog(db,groupId,shop,type,detail,sku=null){await db.prepare('INSERT INTO sync_events (group_id,shop,event_type,detail) VALUES (?,?,?,?)').bind(groupId,shop,type,sku?sku+': '+detail:detail).run()}
-export async function queueProduct(env,groupId,sourceId){
+export async function queueProduct(env,groupId,sourceId,options={}){
   if(!/^gid:\/\/shopify\/Product\/\d+$/.test(sourceId))return;
-  const id=groupId+':'+sourceId;
-  await env.DB.prepare(`INSERT INTO product_sync_jobs (id,group_id,source_id) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET dirty=1,updated_at=CURRENT_TIMESTAMP`).bind(id,groupId,sourceId).run();
+  const id=groupId+':'+(options.manual?'manual:'+options.revision+':':'')+sourceId;
+  await env.DB.prepare(`INSERT INTO product_sync_jobs (id,group_id,source_id,manual,requested_revision) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET dirty=1,updated_at=CURRENT_TIMESTAMP`).bind(id,groupId,sourceId,options.manual?1:0,options.revision??null).run();
   await env.SYNC_QUEUE.send({productJobId:id});
 }
-export async function queueProductCatalog(env,groupId,after=''){
-  const sourceId='@catalog:'+after,id=groupId+':'+sourceId;
-  await env.DB.prepare(`INSERT INTO product_sync_jobs (id,group_id,source_id) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET dirty=1,updated_at=CURRENT_TIMESTAMP`).bind(id,groupId,sourceId).run();
+export async function queueProductCatalog(env,groupId,after='',options={}){
+  const sourceId='@catalog:'+after,id=groupId+':'+(options.manual?'manual:'+options.revision+':':'')+sourceId;
+  await env.DB.prepare(`INSERT INTO product_sync_jobs (id,group_id,source_id,manual,requested_revision) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET dirty=1,updated_at=CURRENT_TIMESTAMP`).bind(id,groupId,sourceId,options.manual?1:0,options.revision??null).run();
   await env.SYNC_QUEUE.send({productJobId:id});
 }
 export async function processProductJob(env,id){
@@ -202,18 +212,19 @@ export async function processProductJob(env,id){
   const claimed=await db.prepare('UPDATE product_sync_jobs SET lock_owner=?,lock_until=?,dirty=0 WHERE id=? AND (lock_owner IS NULL OR lock_until<=?)').bind(owner,now+600,id,now).run();if(!claimed.meta.changes){const existing=await db.prepare('SELECT id FROM product_sync_jobs WHERE id=?').bind(id).first();return existing?{retry:true,delaySeconds:10}:{retry:false};}
   try{
     const job=await db.prepare(`SELECT j.*,g.main_shop FROM product_sync_jobs j JOIN sync_groups g ON g.id=j.group_id WHERE j.id=?`).bind(id).first();if(!job)return {retry:false};
-    const settings=await productSettings(db,job.group_id);if(!settings.enabled||!settings.fields.length)return {retry:false};
+    const settings=await productSettings(db,job.group_id);if((job.manual?job.requested_revision!==settings.revision:!settings.enabled)||!settings.fields.length)return {retry:false};const options={manual:Boolean(job.manual),revision:job.requested_revision};
     if(job.source_id.startsWith('@catalog:')){
       const group={id:job.group_id,main_shop:job.main_shop};await canWrite(db,group,await connected(db,group.id),env,settings.fields);
       const data=await adminGraphql(db,job.main_shop,env,`query ProductScan($after:String){products(first:10,after:$after){nodes{id} pageInfo{hasNextPage endCursor}}}`,{after:job.source_id.slice(9)||null});
-      for(const product of data.products.nodes)await queueProduct(env,job.group_id,product.id);
-      if(data.products.pageInfo.hasNextPage){if(!data.products.pageInfo.endCursor)fail('Product scan cursor missing');await queueProductCatalog(env,job.group_id,data.products.pageInfo.endCursor)}
+      for(const product of data.products.nodes)await queueProduct(env,job.group_id,product.id,options);
+      if(data.products.pageInfo.hasNextPage){if(!data.products.pageInfo.endCursor)fail('Product scan cursor missing');await queueProductCatalog(env,job.group_id,data.products.pageInfo.endCursor,options)}
       await resolveIssue(db,'product:'+id);return {retry:false};
     }
-    const group={id:job.group_id,main_shop:job.main_shop};const value=await snapshot(db,group,job.source_id,settings.fields,env,{priceRules:settings.priceRules});
+    const group={id:job.group_id,main_shop:job.main_shop};const value=await snapshot(db,group,job.source_id,settings.fields,env,{priceRules:settings.priceRules,inclusion:settings.inclusion,skipExcluded:true});
+    if(!value){await db.prepare("DELETE FROM synced_skus WHERE group_id=? AND kind='product' AND source_id=?").bind(job.group_id,job.source_id).run();await resolveIssue(db,'product:'+id);return {retry:false}}
     await canWrite(db,group,value.members,env,settings.fields);
     await reserveSyncedSkus(db,group.id,'product',value.source.id,skuSet(value.source),await activeSubscription(db,group.main_shop,env));
-    for(const item of value.targets){const current=await productSettings(db,job.group_id);if(!current.enabled||current.revision!==settings.revision)return {retry:false};await applyTarget(db,item.shop,item.target,item.plan,env)}
+    for(const item of value.targets){const current=await productSettings(db,job.group_id);if((!job.manual&&!current.enabled)||current.revision!==settings.revision)return {retry:false};await applyTarget(db,item.shop,item.target,item.plan,env)}
     if(value.targets.some(t=>t.plan.changes.length))await productLog(db,job.group_id,job.main_shop,'product_sync','Selected product fields copied automatically');
     await resolveIssue(db,'product:'+id);return {retry:false};
   }catch(error){await db.prepare('UPDATE product_sync_jobs SET dirty=? WHERE id=?').bind(error.status&&error.status<500?0:1,id).run();const job=await db.prepare('SELECT group_id FROM product_sync_jobs WHERE id=?').bind(id).first();const prior=await db.prepare('SELECT resolved_at FROM operational_issues WHERE id=?').bind('product:'+id).first();await recordIssue(db,'product:'+id,'product',error,job?.group_id);if(job&&(!prior||prior.resolved_at))await productLog(db,job.group_id,null,'product_sync_error','A product copy needs attention · '+issueCode(error));if(error.status&&error.status<500)return {retry:false};throw error}

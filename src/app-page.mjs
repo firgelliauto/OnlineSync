@@ -1,3 +1,5 @@
+import { productInclusionHtml, productInclusionScript } from './product-inclusion-page.mjs';
+import { classificationHtml, classificationScript } from './inventory-classification-page.mjs';
 import { backupHtml, backupScript } from './inventory-backup-page.mjs';
 import { planCss, planHtml, planScript } from './plan-page.mjs';
 import { safetyNetHtml, safetyNetScript } from './inventory-safety-net-page.mjs';
@@ -49,12 +51,13 @@ ${setupGuideHtml}
 <div class="page-links"><a class="page-link" data-page="inventory" href="/inventory"><strong>Inventory synchronization</strong><span>Manage SKU rules, prepare quantities and review inventory activity.</span></a><a class="page-link" data-page="products" href="/products"><strong>Product synchronization</strong><span>Choose product fields, set price rules and review product copies.</span></a></div>
 </div>
 <div data-page-view="inventory" hidden>
-${inventorySettingsHtml}
+<p id="inventoryTopProgress" class="small" role="status" aria-live="polite"></p>${inventorySettingsHtml}${classificationHtml}
 
 <section class="panel" id="reviewPanel" hidden><h2>Inventory needs review</h2><p>Pause synchronization, check sales and stock changes in every store, and correct the main store's quantity if needed. Prepare a new preview below to use that main quantity as the starting stock. Resuming will copy it to the other stores.</p><div id="reviewLinks"></div><div id="reviewPreview" class="sample"></div></section>
 </div>
 <div data-page-view="plan" hidden>${planHtml}</div>
 <div data-page-view="products" hidden>
+${productInclusionHtml}
 ${productHtml}
 </div>
 <section class="panel" id="activityPanel" hidden><div class="activity-head"><div><h2 id="activityTitle">Inventory activity</h2><p class="activity-muted">Recent events recorded by this app. Times are shown in your local time zone.</p></div><span class="activity-muted" id="activityUpdated"></span></div><div class="activity-toolbar"><input id="activitySearch" class="activity-search" type="search" placeholder="Filter by SKU" aria-label="Filter by SKU"><div class="activity-tabs" role="group" aria-label="Activity filters"><button type="button" class="activity-tab active" data-activity-filter="all" aria-pressed="true">All</button><button type="button" class="activity-tab" data-activity-filter="problems" aria-pressed="false">Warnings &amp; errors</button><button type="button" class="activity-tab" data-activity-filter="changes" aria-pressed="false">Stock changes</button></div></div><div class="activity-scroll" tabindex="0" role="region" aria-labelledby="activityTitle"><div id="activity" class="activity-list"></div></div></section>
@@ -117,7 +120,9 @@ $('preview').onclick=async()=>{const button=$('preview');button.disabled=true;tr
 $('pause').onclick=async()=>{try{render(await api('/api/control','POST',{action:'pause'}));message('Synchronization paused. An update already sent to Shopify can still finish.','ok')}catch(e){message(e.message,'error')}};
 ${setupGuideScript()}
 ${productScript()}
+${productInclusionScript()}
 ${inventorySettingsScript()}
+${classificationScript()}
 ${safetyNetScript()}
 ${backupScript()}
 ${planScript()}
