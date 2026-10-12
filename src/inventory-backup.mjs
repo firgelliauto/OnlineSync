@@ -1,5 +1,5 @@
 import { adminGraphql } from './shopify.mjs';
-import { withInventoryLock } from './inventory-settings.mjs';
+import { withInventoryLock, inventorySettings, effectiveInventorySettings } from './inventory-settings.mjs';
 import { shopsAllowedToWrite } from './write-policy.mjs';
 import { activeSubscription } from './billing.mjs';
 
@@ -12,19 +12,19 @@ async function member(db,group,shop){
  return row;
 }
 async function quantities(db,shop,location,env){
- const rows=[];let after=null,scanned=0;
+ const rows=[],skuCounts=new Map();let after=null,scanned=0;
  do{const data=await adminGraphql(db,shop,env,`query BackupInventory($after:String,$location:ID!){productVariants(first:250,after:$after){nodes{sku inventoryItem{id tracked inventoryLevel(locationId:$location){quantities(names:["available"]){name quantity}}}} pageInfo{hasNextPage endCursor}}}`,{after,location});
  scanned+=data.productVariants.nodes.length;if(scanned>10000)fail('This catalog exceeds the current 10,000-variant backup scan limit. Contact support for a larger backup.',413);
- for(const v of data.productVariants.nodes){const q=v.inventoryItem?.inventoryLevel?.quantities?.find(q=>q.name==='available')?.quantity;if(v.inventoryItem?.tracked&&Number.isInteger(q))rows.push({itemId:v.inventoryItem.id,sku:v.sku||'',quantity:q})}
+ for(const v of data.productVariants.nodes){const sku=(v.sku||'').trim();if(sku)skuCounts.set(sku,(skuCounts.get(sku)||0)+1);const q=v.inventoryItem?.inventoryLevel?.quantities?.find(q=>q.name==='available')?.quantity;if(v.inventoryItem?.tracked&&Number.isInteger(q))rows.push({itemId:v.inventoryItem.id,sku:v.sku||'',quantity:q})}
  if(rows.length>limit)fail('Backups currently support up to 5,000 tracked variants at the selected location',413);
  if(!data.productVariants.pageInfo.hasNextPage)break;
  after=data.productVariants.pageInfo.endCursor;if(!after)fail('Shopify pagination cursor is missing');
- }while(true);return rows;
+ }while(true);return {rows,duplicateSkus:new Set([...skuCounts].filter(([,count])=>count>1).map(([sku])=>sku))};
 }
 async function sign(payload,env){const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(env.TOKEN_ENCRYPTION_KEY),{name:'HMAC',hash:'SHA-256'},false,['sign']);return Array.from(new Uint8Array(await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(JSON.stringify(payload))))).map(x=>x.toString(16).padStart(2,'0')).join('')}
 export async function downloadBackup(db,group,shop,env){
  const m=await member(db,group,shop),startedAt=new Date().toISOString();
- const items=await quantities(db,shop,m.location_id,env);
+ const {rows:items}=await quantities(db,shop,m.location_id,env);
  const payload={format:'OnlineSync inventory backup',version:1,groupId:group.id,shop,locationId:m.location_id,startedAt,completedAt:new Date().toISOString(),quantityType:'available',items};
  await db.prepare(`INSERT INTO sync_events(group_id,shop,event_type,detail) VALUES (?,?,'inventory_backup',?)`).bind(group.id,shop,`Downloaded inventory snapshot containing ${items.length} tracked variants.`).run();
  return {payload,signature:await sign(payload,env)};
@@ -39,15 +39,40 @@ export async function validateBackup(file,group,env){
 export async function previewRestore(db,group,shop,file,env){
  if(group.role!=='main')fail('Open the main store to restore inventory',403);
  const p=await validateBackup(file,group,env),m=await member(db,group,shop);
- if(p.shop!==shop||p.locationId!==m.location_id)fail('Restore to the same store and inventory location that the backup came from',400);
- const live=new Map((await quantities(db,shop,m.location_id,env)).map(row=>[row.itemId,row]));
- const rows=[],skipped=[];
- for(const item of p.items){const current=live.get(item.itemId);if(!current||current.sku!==item.sku){skipped.push(item.sku||item.itemId);continue}if(current.quantity!==item.quantity)rows.push({...item,before:current.quantity})}
+ const catalog=await quantities(db,shop,m.location_id,env);
+ const settings=effectiveInventorySettings(await inventorySettings(db,group.id));
+ const {rows,skipped,unchanged}=planBackupRestore(p,shop,catalog.rows,settings.mappings,group.main_shop,catalog.duplicateSkus);
  const id=crypto.randomUUID(),now=Math.floor(Date.now()/1000);
  await db.prepare('DELETE FROM inventory_restores WHERE group_id=? AND status=\'preview\' AND created_at<?').bind(group.id,now-86400).run();
  await db.prepare('INSERT INTO inventory_restores(id,group_id,shop,location_id,created_at) VALUES (?,?,?,?,?)').bind(id,group.id,shop,m.location_id,now).run();
  for(let i=0;i<rows.length;i+=15){const chunk=rows.slice(i,i+15);await db.prepare(`INSERT INTO inventory_restore_items(restore_id,item_id,sku,before_quantity,target_quantity) VALUES ${chunk.map(()=>'(?,?,?,?,?)').join(',')}`).bind(...chunk.flatMap(row=>[id,row.itemId,row.sku,row.before,row.quantity])).run()}
- return {id,shop,locationId:m.location_id,backupAt:p.completedAt,changed:rows.length,unchanged:p.items.length-rows.length-skipped.length,skipped:skipped.length,sample:rows.slice(0,20).map(row=>({sku:row.sku,from:row.before,to:row.quantity}))};
+ await db.prepare(`INSERT INTO sync_events(group_id,shop,event_type,detail) VALUES (?,?,'inventory_restore_preview',?)`).bind(group.id,shop,`Backup from ${p.shop} reviewed for restore to ${shop}: ${rows.length} changes, ${skipped.length} skipped. No quantities changed.`).run();
+ return {id,sourceShop:p.shop,shop,locationId:m.location_id,backupAt:p.completedAt,changed:rows.length,unchanged,skipped:skipped.length,skippedSample:skipped.slice(0,20),sample:rows.slice(0,20).map(row=>({sourceSku:row.sourceSku,sku:row.sku,from:row.before,to:row.quantity}))};
+}
+export function planBackupRestore(backup,targetShop,live,mappings=[],mainShop='',duplicateSkus=new Set()){
+ const byId=new Map(live.map(row=>[row.itemId,row])),bySku=new Map(),sourceCounts=new Map();
+ for(const row of live){const sku=row.sku.trim();if(!bySku.has(sku))bySku.set(sku,[]);bySku.get(sku).push(row)}
+ for(const row of backup.items){const sku=row.sku.trim();sourceCounts.set(sku,(sourceCounts.get(sku)||0)+1)}
+ const graph=new Map(),node=(shop,sku)=>JSON.stringify([shop,sku]);
+ for(const mapping of mappings){const a=node(mapping.sourceShop||mainShop,mapping.sourceSku||mapping.mainSku),b=node(mapping.targetShop||mapping.shop,mapping.targetSku);for(const [left,right] of [[a,b],[b,a]]){if(!graph.has(left))graph.set(left,new Set());graph.get(left).add(right)}}
+ const planned=[],skipped=[];let unchanged=0;
+ for(const item of backup.items){let current,reason;const sku=item.sku.trim();
+  if(backup.shop===targetShop){current=byId.get(item.itemId);if(!current||current.sku!==item.sku)reason='Variant was removed, moved, or its SKU changed';}
+  else if(!sku||sourceCounts.get(sku)!==1)reason='Source SKU is blank or duplicated in the backup';
+  else{
+   const root=node(backup.shop,sku),seen=new Set(),pending=[root],explicit=new Set(),aliases=new Set([sku]);
+   while(pending.length){const key=pending.pop();if(seen.has(key))continue;seen.add(key);const [shop,alias]=JSON.parse(key);aliases.add(alias);if(shop===targetShop)explicit.add(alias);pending.push(...(graph.get(key)||[]))}
+   // Explicit target mappings take priority. Unmapped stores may use a unique same-SKU alias from the component.
+   const candidates=explicit.size?[...explicit]:[...aliases].filter(alias=>bySku.has(alias));
+   if(candidates.length!==1)reason=candidates.length?'Mapping points to multiple destination SKUs':'No matching destination SKU';
+   else{const alias=candidates[0],matches=bySku.get(alias)||[];if(matches.length!==1||duplicateSkus.has(alias))reason=matches.length||duplicateSkus.has(alias)?'Destination SKU is duplicated':'Mapped destination SKU is missing';else current=matches[0]}
+  }
+  if(reason){skipped.push({sku:item.sku,reason});continue}
+  planned.push({itemId:current.itemId,sku:current.sku,sourceSku:item.sku,before:current.quantity,quantity:item.quantity});
+ }
+ const destinationCounts=new Map();for(const row of planned)destinationCounts.set(row.itemId,(destinationCounts.get(row.itemId)||0)+1);
+ const rows=[];for(const row of planned){if(destinationCounts.get(row.itemId)>1)skipped.push({sku:row.sourceSku,reason:'Multiple backup variants point to the same destination variant'});else if(row.before===row.quantity)unchanged++;else rows.push(row)}
+ return {rows,skipped,unchanged};
 }
 export async function restoreStatus(db,group,id){
  const row=await db.prepare('SELECT id,shop,status,created_at FROM inventory_restores WHERE id=? AND group_id=?').bind(id,group.id).first();if(!row)fail('Restore not found',404);
