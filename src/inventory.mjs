@@ -137,13 +137,15 @@ export async function processLink(env, linkId) {
   const owner = crypto.randomUUID();
   const claim = await db.prepare(`UPDATE sync_jobs SET lock_owner = ?, lock_until = ?,
     dirty = 0, updated_at = CURRENT_TIMESTAMP WHERE link_id = ?
-    AND (lock_owner IS NULL OR lock_until <= ?)`).bind(owner, now + 600, linkId, now).run();
+    AND (lock_owner IS NULL OR lock_until <= ?)
+    AND NOT EXISTS (SELECT 1 FROM inventory_links l JOIN sync_groups g ON g.id=l.group_id WHERE l.id=sync_jobs.link_id AND g.inventory_config_lock IS NOT NULL AND g.inventory_config_lock_until>?)`).bind(owner, now + 600, linkId, now, now).run();
   if (claim.meta.changes !== 1) {
     const job = await db.prepare('SELECT link_id FROM sync_jobs WHERE link_id = ?').bind(linkId).first();
     return job ? { retry: true, delaySeconds: 5 } : { retry: false };
   }
   try {
-    const link = await db.prepare(`SELECT l.*, g.main_shop, g.status AS group_status
+    const link = await db.prepare(`SELECT l.*, g.main_shop, g.status AS group_status,
+      (g.preview_completed_at IS NULL AND EXISTS(SELECT 1 FROM inventory_settings s WHERE s.group_id=g.id)) AS rules_refresh_pending
       FROM inventory_links l JOIN sync_groups g ON g.id = l.group_id WHERE l.id = ?`)
       .bind(linkId).first();
     if (!link || link.status !== 'active' || link.group_status !== 'active') return { retry: false };
@@ -174,7 +176,6 @@ export async function processLink(env, linkId) {
       await block(db, link, 'A connected store was uninstalled');
       return { retry: false };
     }
-    await checkLiveSelection(db,link,members.find(m=>m.shop===link.main_shop),env,members);
     const pending = await db.prepare('SELECT 1 AS found FROM sync_writes WHERE link_id = ? LIMIT 1')
       .bind(linkId).first();
     if (pending) {
@@ -186,7 +187,11 @@ export async function processLink(env, linkId) {
         await db.prepare('UPDATE sync_jobs SET dirty = 1 WHERE link_id = ?').bind(linkId).run();
         return { retry: true, delaySeconds: 1 };
       }
-    } else await reconcile(db, link, members, env);
+    } else {
+      if(link.rules_refresh_pending){await db.prepare('UPDATE sync_jobs SET dirty=1 WHERE link_id=?').bind(linkId).run();return {retry:true,delaySeconds:5}}
+      await checkLiveSelection(db,link,members.find(m=>m.shop===link.main_shop),env,members);
+      await reconcile(db, link, members, env);
+    }
     await resolveIssue(db, 'sync:' + linkId);
     return { retry: false };
   } catch (error) {

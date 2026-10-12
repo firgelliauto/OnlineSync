@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {defaults,selectedInventory,inventoryMatches,validateSettings,saveInventorySettings,setInventorySection,inventorySettings,withInventoryLock} from '../src/inventory-settings.mjs';
 import {csvCell,exportActivity} from '../src/activity-export.mjs';
+import {applyInventoryMatches} from '../src/inventory-refresh.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync,readdirSync} from 'node:fs';
 test('tag matching requires a common configured tag in every store and remains independent of SKU includes',()=>{
@@ -44,6 +45,23 @@ test('mapping validation requires two explicit group stores, preserves reverse d
  assert.equal(validateSettings({...defaults(),mode:'selected'},['main','second'],'main').mode,'selected');
 });
 function fixture(){const sql=new DatabaseSync(':memory:');for(const f of readdirSync('migrations').filter(f=>f.endsWith('.sql')).sort())sql.exec(readFileSync('migrations/'+f,'utf8'));sql.exec(`INSERT INTO stores(shop,access_token_cipher,refresh_token_cipher,token_expires_at,refresh_expires_at) VALUES('main','x','x',1,1),('child','x','x',1,1),('other','x','x',1,1);INSERT INTO sync_groups(id,main_shop,status) VALUES('g','main','paused'),('o','other','setup');INSERT INTO group_stores(group_id,shop,role) VALUES('g','main','main'),('g','child','child'),('o','other','main');`);const db={prepare(query){const make=values=>({first:async()=>sql.prepare(query).get(...values)??null,all:async()=>({results:sql.prepare(query).all(...values)}),run:async()=>({meta:{changes:Number(sql.prepare(query).run(...values).changes)}})});return {...make([]),bind:(...values)=>make(values)}},async batch(statements){sql.exec('BEGIN');try{const results=[];for(const s of statements)results.push(await s.run());sql.exec('COMMIT');return results}catch(e){sql.exec('ROLLBACK');throw e}}};return {sql,db}}
+
+test('background refresh retains quantity baselines, adds selected products and removes only deselected links',async()=>{
+ const {sql,db}=fixture(),group={id:'g',main_shop:'main',status:'active'},members=[{shop:'main',location_id:'loc'},{shop:'child',location_id:'loc'}];
+ try{
+ sql.exec("UPDATE sync_groups SET status='active' WHERE id='g'; INSERT INTO inventory_links(id,group_id,sku,shared_quantity,status,initialized) VALUES('keep','g','A',12,'active',1),('remove','g','B',9,'active',1); INSERT INTO inventory_members(link_id,shop,inventory_item_id,location_id,last_quantity) VALUES('keep','main','ma','loc',12),('keep','child','ca','loc',12); INSERT INTO sync_jobs(link_id,dirty) VALUES('keep',1);");
+ const variant=(sku,itemId,quantity)=>({sku,itemId,quantity});
+ await withInventoryLock(db,group,()=>applyInventoryMatches(db,group,members,[{sku:'A',source:variant('A','ma',11),children:[variant('A','ca',12)]},{sku:'C',source:variant('C','mc',8),children:[variant('C','cc',20)]}]),false,{active:true});
+ assert.equal(sql.prepare("SELECT shared_quantity FROM inventory_links WHERE id='keep'").get().shared_quantity,12);
+ assert.equal(sql.prepare("SELECT last_quantity FROM inventory_members WHERE link_id='keep' AND shop='main'").get().last_quantity,12);
+ assert.equal(sql.prepare("SELECT id FROM inventory_links WHERE sku='B'").get(),undefined);
+ assert.equal(sql.prepare("SELECT status FROM inventory_links WHERE sku='C'").get().status,'active');
+ assert.equal(sql.prepare("SELECT COUNT(*) AS n FROM sync_jobs WHERE dirty=1").get().n,2);
+ sql.exec("INSERT INTO sync_writes(id,link_id,shop,from_quantity,to_quantity) VALUES('pending','keep','child',12,11)");
+ await assert.rejects(withInventoryLock(db,group,()=>applyInventoryMatches(db,group,members,[]),false,{active:true}),/finishing/);
+ assert.equal(sql.prepare("SELECT to_quantity FROM sync_writes WHERE id='pending'").get().to_quantity,11);
+ }finally{sql.close()}
+});
 test('rule switches retain entries while disabled rules have no effect and mappings coexist with automatic matching',()=>{
  const catalog=values=>new Map(values.map(sku=>[sku,{sku,itemId:sku}]));
  const source=catalog(['A','B','C']),target=catalog(['A','B','ALIAS','C']);
@@ -66,7 +84,7 @@ test('rule switches retain entries while disabled rules have no effect and mappi
  assert.throws(()=>validateSettings({...defaults(),includesEnabled:'false'},['child'],'main'),/switches/);
 });
 
-test('independent switches merge only their saved field, preserve entries, reject active changes and isolate the customer',async()=>{
+test('independent switches merge only their saved field, preserve entries, allow active changes and isolate the customer',async()=>{
  const {sql,db}=fixture(),group={id:'g',role:'main',main_shop:'main'};
  try{
   const saved={...defaults(),mode:'selected',includedSkus:['A'],excludedSkus:['B'],mappings:[{sourceShop:'main',sourceSku:'A',targetShop:'child',targetSku:'ALIAS'}]};
@@ -82,11 +100,26 @@ test('independent switches merge only their saved field, preserve entries, rejec
   await assert.rejects(setInventorySection(db,{...group,role:'child'},{section:'automatic',enabled:false}),/main store/);
   await assert.rejects(setInventorySection(db,group,{section:'anything',enabled:true}),/section/);
   sql.exec("UPDATE sync_groups SET status='active' WHERE id='g'");
-  await assert.rejects(setInventorySection(db,group,{section:'automatic',enabled:false}),/Pause/);
-  assert.equal((await inventorySettings(db,'g')).mode,'all');
+  await setInventorySection(db,group,{section:'automatic',enabled:false});
+  assert.equal((await inventorySettings(db,'g')).mode,'selected');
  }finally{sql.close()}
 });
 test('product selections use OR includes and exclusion precedence for SKUs, tags and collections',()=>{const s=defaults(),v={sku:'A',tags:['Summer'],collections:[{id:'gid://shopify/Collection/1'}]};assert.equal(selectedInventory(v,s),true);s.mode='selected';assert.equal(selectedInventory(v,s),false);s.includedTags=['summer'];assert.equal(selectedInventory(v,s),true);s.excludedCollections=['gid://shopify/Collection/1'];assert.equal(selectedInventory(v,s),false);s.excludedCollections=[];s.excludedSkus=['A'];assert.equal(selectedInventory(v,s),false);s.includedCollections=['gid://shopify/Collection/2'];assert.throws(()=>selectedInventory({...v,collectionsIncomplete:true},s));});
 test('manual mappings override automatic same-SKU matches and exclusions override mappings',()=>{const source=new Map(['A','B'].map(sku=>[sku,{sku,itemId:sku}])),target=new Map([['B',{sku:'B',itemId:'target'}]]),s=defaults();s.mappings=[{mainSku:'A',shop:'child',targetSku:'B'}];assert.deepEqual(inventoryMatches(source,[target],['child'],s).map(row=>row.sku),['A']);s.excludedSkus=['B'];assert.equal(inventoryMatches(source,[target],['child'],s)[0].children[0].sku,'B');s.mappings[0].targetSku='missing';assert.throws(()=>inventoryMatches(source,[target],['child'],s),/missing/);assert.throws(()=>validateSettings({...defaults(),mappings:[{mainSku:'A',shop:'foreign',targetSku:'B'}]},['child']),/connected store/);});
-test('saving inventory settings requires a paused, idle group, preserves SKU history and isolates another customer',async()=>{const {sql,db}=fixture();try{sql.exec(`INSERT INTO inventory_links(id,group_id,sku,shared_quantity,status) VALUES('l','g','SKU',12,'active'),('o','o','OTHER',8,'preview');INSERT INTO sync_jobs(link_id,dirty) VALUES('l',1);INSERT INTO sync_events(group_id,link_id,event_type,detail) VALUES('g','l','inventory_write','SKU: 13 → 12');UPDATE sync_groups SET status='active' WHERE id='g';`);const group={id:'g',role:'main',main_shop:'main'};await assert.rejects(saveInventorySettings(db,group,defaults()),/Pause/);sql.exec(`UPDATE sync_groups SET status='paused' WHERE id='g';INSERT INTO sync_writes(id,link_id,shop,from_quantity,to_quantity) VALUES('w','l','child',13,12);`);await assert.rejects(saveInventorySettings(db,group,defaults()),/pending/);sql.exec("DELETE FROM sync_writes");await withInventoryLock(db,group,async()=>{await assert.rejects(saveInventorySettings(db,group,defaults()),/pending/)});await assert.rejects(saveInventorySettings(db,{...group,role:'child'},defaults()),/main store/);await saveInventorySettings(db,group,defaults());assert.equal(sql.prepare("SELECT COUNT(*) AS n FROM inventory_links WHERE group_id='g'").get().n,0);assert.equal(sql.prepare("SELECT sku FROM sync_events WHERE link_id='l'").get().sku,'SKU');assert.equal(sql.prepare("SELECT sku FROM inventory_links WHERE group_id='o'").get().sku,'OTHER');assert.equal(sql.prepare("SELECT inventory_config_lock FROM sync_groups WHERE id='g'").get().inventory_config_lock,null)}finally{sql.close()}});
+test('autosave accepts active, busy groups without losing pending updates or other customer data',async()=>{
+ const {sql,db}=fixture(),group={id:'g',role:'main',main_shop:'main'};
+ try{
+ sql.exec("INSERT INTO inventory_links(id,group_id,sku,shared_quantity,status) VALUES('l','g','SKU',12,'active'),('o','o','OTHER',8,'preview'); INSERT INTO sync_jobs(link_id,dirty,lock_owner,lock_until) VALUES('l',1,'worker',9999999999); INSERT INTO sync_writes(id,link_id,shop,from_quantity,to_quantity) VALUES('w','l','child',13,12); UPDATE sync_groups SET status='active' WHERE id='g';");
+ await saveInventorySettings(db,group,{...defaults(),mode:'selected',includesEnabled:false,mappingsEnabled:false,tagsEnabled:false,collectionsEnabled:false});
+ await setInventorySection(db,group,{section:'tags',enabled:true});
+ await setInventorySection(db,group,{section:'collections',enabled:true});
+ const settings=await inventorySettings(db,'g');assert.equal(settings.tagsEnabled,true);assert.equal(settings.collectionsEnabled,true);assert.equal(settings.mode,'selected');assert.equal(settings.includesEnabled,false);assert.equal(settings.mappingsEnabled,false);
+ assert.equal(sql.prepare("SELECT to_quantity FROM sync_writes WHERE id='w'").get().to_quantity,12);
+ assert.equal(sql.prepare("SELECT shared_quantity FROM inventory_links WHERE id='l'").get().shared_quantity,12);
+ assert.equal(sql.prepare("SELECT sku FROM inventory_links WHERE id='o'").get().sku,'OTHER');
+ assert.equal(sql.prepare("SELECT status FROM sync_groups WHERE id='g'").get().status,'active');
+ await assert.rejects(saveInventorySettings(db,{...group,role:'child'},defaults()),/main store/);
+ sql.exec("UPDATE sync_groups SET inventory_restore_id='restore' WHERE id='g'");await assert.rejects(setInventorySection(db,group,{section:'tags',enabled:false}),/finishing/);
+ }finally{sql.close()}
+});
 test('CSV export paginates a customer history, keeps deleted link SKUs and neutralizes spreadsheet formulas',async()=>{const {sql,db}=fixture();try{for(let i=0;i<1003;i++)sql.prepare("INSERT INTO sync_events(group_id,shop,event_type,detail,sku) VALUES('g','main','inventory_write',?,'SKU')").run('=formula '+i);sql.exec("INSERT INTO sync_events(group_id,event_type,detail) VALUES('o','inventory_write','secret'),('g','product_sync','product')");const first=await exportActivity(db,'g');assert.equal(first.rows.length,1000);assert.equal(first.next,1000);const second=await exportActivity(db,'g',first.next);assert.equal(second.rows.length,3);assert.equal(second.next,null);assert.equal(first.rows[0].sku,'SKU');assert.ok(first.rows.every(r=>r.detail.startsWith('=formula')));assert.equal((await exportActivity(db,'g',0,'products')).rows.length,1);assert.equal(csvCell('=cmd'),`"'=cmd"`);assert.equal(csvCell('a,"b"'),`"a,""b"""`)}finally{sql.close()}});

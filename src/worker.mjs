@@ -20,6 +20,7 @@ import { heartbeat, recordIssue, resolveIssue } from './operations.mjs';
 import { productSettings, saveProductSettings, previewProduct, applyProductPreview, queueProduct, processProductJob, queueProductCatalog } from './product-sync.mjs';
 import { saveProductInclusion } from './product-sync.mjs';
 import { productCollections } from './product-inclusion.mjs';
+import { refreshInventoryRules } from './inventory-refresh.mjs';
 
 const json = (data, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
 const invalidSession = () => new Response(JSON.stringify({ error: 'Invalid Shopify session' }), {
@@ -173,6 +174,16 @@ async function control(db, group, env, input) {
   if (!shopsAllowedToWrite(env, stores.map(store => store.shop))) {
     return json({ error: 'Inventory writes are restricted to the configured pilot stores' }, 409);
   }
+  if(!group.preview_completed_at && await db.prepare('SELECT id FROM inventory_links WHERE group_id=? LIMIT 1').bind(group.id).first()){
+    await db.batch([
+      db.prepare("UPDATE sync_groups SET status='active' WHERE id=?").bind(group.id),
+      db.prepare("UPDATE sync_jobs SET dirty=1 WHERE link_id IN (SELECT id FROM inventory_links WHERE group_id=? AND status='active')").bind(group.id)
+    ]);
+    await env.SYNC_QUEUE.send({inventoryRulesGroupId:group.id});
+    const pending=(await db.prepare("SELECT DISTINCT w.link_id FROM sync_writes w JOIN inventory_links l ON l.id=w.link_id WHERE l.group_id=? AND l.status='active'").bind(group.id).all()).results;
+    await enqueueLinks(env,pending.map(w=>w.link_id));
+    return json(await status(db,group.main_shop,env));
+  }
   let links = (await db.prepare(`SELECT id FROM inventory_links
     WHERE group_id = ? AND status IN ('preview', 'active')`).bind(group.id).all()).results;
   if (!links.length) {
@@ -250,8 +261,8 @@ async function merchantApi(request, env, path) {
       return json({billing,isDevelopment:main?.is_development===1,skuUsage:await syncedSkuCount(db,group.id),skuPlan:subscriptionPlan(billing)});
     }
     if (path === '/api/inventory-settings' && request.method === 'GET') return json(await inventorySettings(db,group.id));
-    if (path === '/api/inventory-settings' && request.method === 'POST') return json(await saveInventorySettings(db,group,await request.json()));
-    if (path === '/api/inventory-section' && request.method === 'POST') return json(await setInventorySection(db,group,await request.json()));
+    if (path === '/api/inventory-settings' && request.method === 'POST') {const saved=await saveInventorySettings(db,group,await request.json());await env.SYNC_QUEUE.send({inventoryRulesGroupId:group.id});return json(saved)}
+    if (path === '/api/inventory-section' && request.method === 'POST') {const saved=await setInventorySection(db,group,await request.json());await env.SYNC_QUEUE.send({inventoryRulesGroupId:group.id});return json(saved)}
     if (path === '/api/inventory-options' && request.method === 'GET') return json(await catalogOptions(db,group,env));
     if (path === '/api/activity-export' && request.method === 'GET') {
       const params=new URL(request.url).searchParams;
@@ -348,7 +359,7 @@ async function merchantApi(request, env, path) {
       return json(await prepareConflictPreview(db, group, input.linkId, env));
     }
     if (path === '/api/control' && request.method === 'POST') {
-      const input=await request.json();return await (input.action==='pause'?control(db,group,env,input):withInventoryLock(db,group,()=>control(db,group,env,input),true));
+      const input=await request.json();return await (input.action==='pause'?control(db,group,env,input):withInventoryLock(db,group,()=>control(db,group,env,input),true,{active:true,busy:true}));
     }
     return json({ error: 'Not found' }, 404);
   } catch (error) {
@@ -485,6 +496,11 @@ export default {
   },
   async queue(batch, env) {
     for (const message of batch.messages) {
+      if(typeof message.body?.inventoryRulesGroupId==='string'){
+        try{const result=await refreshInventoryRules(env,message.body.inventoryRulesGroupId);if(result.retry)message.retry({delaySeconds:result.delaySeconds??30});else {await resolveIssue(env.DB,'inventory-rules:'+message.body.inventoryRulesGroupId);message.ack()}}
+        catch(error){await recordIssue(env.DB,'inventory-rules:'+message.body.inventoryRulesGroupId,'sync',error,message.body.inventoryRulesGroupId);message.retry({delaySeconds:30})}
+        continue;
+      }
       if(typeof message.body?.productJobId==='string'){
         try{const result=await processProductJob(env,message.body.productJobId);if(result.retry)message.retry({delaySeconds:result.delaySeconds??30});else message.ack()}
         catch(error){console.error('Product sync failed',error);message.retry({delaySeconds:30})}
@@ -505,6 +521,8 @@ export default {
   async scheduled(event, env) {
     const db = env.DB;
     try {
+    const refreshGroups=(await db.prepare("SELECT id FROM sync_groups WHERE preview_completed_at IS NULL AND inventory_restore_id IS NULL AND status='active' LIMIT 50").all()).results;
+    for(const group of refreshGroups)await env.SYNC_QUEUE.send({inventoryRulesGroupId:group.id});
     const productJobs=(await db.prepare(`SELECT j.id FROM product_sync_jobs j JOIN product_sync_settings s ON s.group_id=j.group_id
       WHERE j.dirty=1 AND s.enabled=1 AND (j.lock_owner IS NULL OR j.lock_until<=?) LIMIT 50`).bind(Math.floor(Date.now()/1000)).all()).results;
     for(const job of productJobs)await env.SYNC_QUEUE.send({productJobId:job.id});

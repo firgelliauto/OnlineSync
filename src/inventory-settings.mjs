@@ -146,17 +146,15 @@ export async function saveInventorySettings(db, group, input) {
   return withInventoryLock(db,group,async()=>{
     await persistInventorySettings(db,group,settings);
     return settings;
-  });
+  },true,{active:true,busy:true});
 }
 
 async function persistInventorySettings(db,group,settings) {
   await db.batch([
       db.prepare(`INSERT INTO inventory_settings(group_id,settings) VALUES (?,?) ON CONFLICT(group_id) DO UPDATE SET settings=excluded.settings,updated_at=CURRENT_TIMESTAMP`).bind(group.id,JSON.stringify(settings)),
       db.prepare(`UPDATE sync_events SET sku=(SELECT l.sku FROM inventory_links l WHERE l.id=sync_events.link_id) WHERE group_id=? AND sku IS NULL AND link_id IS NOT NULL`).bind(group.id),
-      db.prepare('DELETE FROM inventory_links WHERE group_id=?').bind(group.id),
-      db.prepare("DELETE FROM synced_skus WHERE group_id=? AND kind='inventory'").bind(group.id),
       db.prepare('UPDATE sync_groups SET preview_completed_at=NULL WHERE id=?').bind(group.id),
-      db.prepare(`INSERT INTO sync_events(group_id,shop,event_type,detail) VALUES (?,?,'inventory_settings','Inventory selection and mappings saved. Turn On to apply these rules and resume syncing. No stock changed.')`).bind(group.id,group.main_shop)
+      db.prepare(`INSERT INTO sync_events(group_id,shop,event_type,detail) VALUES (?,?,'inventory_settings','Inventory rules saved automatically. Matching will refresh in the background; existing inventory updates are preserved.')`).bind(group.id,group.main_shop)
   ]);
 }
 
@@ -172,16 +170,16 @@ export async function setInventorySection(db,group,input) {
     const settings={...saved,[field]:value};
     await persistInventorySettings(db,group,settings);
     return settings;
-  });
+  },true,{active:true,busy:true});
 }
 
-export async function withInventoryLock(db,group,action,allowPending=false) {
+export async function withInventoryLock(db,group,action,allowPending=false,options={}) {
   const owner=crypto.randomUUID(),now=Math.floor(Date.now()/1000);
-  const claim=await db.prepare(`UPDATE sync_groups SET inventory_config_lock=?, inventory_config_lock_until=? WHERE id=? AND status<>'active' AND (inventory_config_lock IS NULL OR inventory_config_lock_until<=?)
-    AND NOT EXISTS (SELECT 1 FROM sync_jobs j JOIN inventory_links l ON l.id=j.link_id WHERE l.group_id=? AND j.lock_owner IS NOT NULL AND j.lock_until>?)
+  const claim=await db.prepare(`UPDATE sync_groups SET inventory_config_lock=?, inventory_config_lock_until=? WHERE id=? AND (?=1 OR status<>'active') ${options.active?'AND inventory_restore_id IS NULL':''} AND (inventory_config_lock IS NULL OR inventory_config_lock_until<=?)
+    AND (?=1 OR NOT EXISTS (SELECT 1 FROM sync_jobs j JOIN inventory_links l ON l.id=j.link_id WHERE l.group_id=? AND j.lock_owner IS NOT NULL AND j.lock_until>?))
     AND (?=1 OR NOT EXISTS (SELECT 1 FROM sync_writes w JOIN inventory_links l ON l.id=w.link_id WHERE l.group_id=?))`)
-    .bind(owner,now+600,group.id,now,group.id,now,allowPending?1:0,group.id).run();
-  if(!claim.meta.changes) fail('Pause inventory syncing on the Inventory syncing page and wait for pending updates to finish before saving');
+    .bind(owner,now+600,group.id,options.active?1:0,now,options.busy?1:0,group.id,now,allowPending?1:0,group.id).run();
+  if(!claim.meta.changes) fail('Inventory updates are finishing. Your saved rules will be applied shortly.');
   try { return await action();
 
   } finally {await db.prepare('UPDATE sync_groups SET inventory_config_lock=NULL,inventory_config_lock_until=0 WHERE id=? AND inventory_config_lock=?').bind(group.id,owner).run()}
