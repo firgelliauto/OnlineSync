@@ -21,7 +21,7 @@ function initializeSectionPanels(){
   const heading=panel.querySelector('h2');if(!heading)continue;
   const details=document.createElement('details'),summary=document.createElement('summary'),body=document.createElement('div');details.className='section-details';body.className='section-body';details.open=true;
   const key='onlinesync:section:'+new URLSearchParams(location.search).get('shop')+':'+panel.id;
-  try{const saved=localStorage.getItem(key);if(saved!==null)details.open=saved==='open'}catch{}
+  try{const saved=localStorage.getItem(key);if(saved!==null&&panel.id!=='productPanel')details.open=saved==='open'}catch{}
   summary.append(heading);
   if(panel.id==='inventorySelectionPanel'){for(const id of ['includedSwitch','excludedSwitch'])summary.append($(id))}
   else {const control=panel.querySelector('.inventory-switch');if(control)summary.append(control)}
