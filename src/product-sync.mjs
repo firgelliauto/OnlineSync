@@ -107,6 +107,16 @@ export async function saveProductInclusion(db,group,input){
  await productLog(db,group.id,group.main_shop,'product_inclusion','Product inclusion rules saved. No products changed.');
  return productSettings(db,group.id);
 }
+export async function setProductAutomatic(db,group,enabled){
+  if(group.role!=='main')fail('Open the main store to change automatic product synchronization',403);
+  if(typeof enabled!=='boolean')fail('Choose On or Off',400);
+  await db.batch([
+    db.prepare(`INSERT INTO product_sync_settings(group_id,fields,enabled) VALUES (?,'[]',?) ON CONFLICT(group_id) DO UPDATE SET enabled=excluded.enabled,revision=revision+1,updated_at=CURRENT_TIMESTAMP`).bind(group.id,Number(enabled)),
+    db.prepare('DELETE FROM product_sync_previews WHERE group_id=?').bind(group.id),
+    db.prepare('UPDATE product_sync_jobs SET dirty=0 WHERE group_id=?').bind(group.id)
+  ]);
+  return productSettings(db,group.id);
+}
 export async function saveProductSettings(db,group,fields,enabled,priceRules){
   if(group.role!=='main')fail('Open the main store to change product sync settings',403);
   fields=selectedFields(fields);if(typeof enabled!=='boolean')fail('Choose whether automatic product sync is enabled',400);

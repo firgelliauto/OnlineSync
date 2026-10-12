@@ -21,6 +21,7 @@ import { productSettings, saveProductSettings, previewProduct, applyProductPrevi
 import { saveProductInclusion } from './product-sync.mjs';
 import { productCollections } from './product-inclusion.mjs';
 import { refreshInventoryRules } from './inventory-refresh.mjs';
+import { setProductAutomatic } from './product-sync.mjs';
 
 const json = (data, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
 const invalidSession = () => new Response(JSON.stringify({ error: 'Invalid Shopify session' }), {
@@ -274,6 +275,7 @@ async function merchantApi(request, env, path) {
       return json(await status(db, user.shop, env));
     }
     if (path === '/api/product-settings' && request.method === 'GET') return json(await productSettings(db,group.id));
+    if(path==='/api/product-automatic'&&request.method==='POST')return json(await setProductAutomatic(db,group,(await request.json()).enabled));
     if(path==='/api/product-inclusion'&&request.method==='POST')return json(await saveProductInclusion(db,group,await request.json()));
     if(path==='/api/product-collections'&&request.method==='GET')return json(await productCollections(db,group.main_shop,env));
     if(path==='/api/product-inclusion/run'&&request.method==='POST'){

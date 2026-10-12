@@ -5,7 +5,7 @@ import { planCss, planHtml, planScript } from './plan-page.mjs';
 import { safetyNetHtml, safetyNetScript } from './inventory-safety-net-page.mjs';
 import { setupGuideCss, setupGuideHtml, setupGuideScript } from './setup-guide.mjs';
 import { inventorySettingsHtml, inventorySettingsCss, inventorySettingsScript, activityExportHtml } from './inventory-settings-page.mjs';
-import { productCss, productHtml, productScript } from './product-page.mjs';
+import { productCss, productHtml, productAutomaticHtml, productScript } from './product-page.mjs';
 export function appPage(clientId) {
   const safeId = String(clientId).replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
   return `<!doctype html>
@@ -58,6 +58,7 @@ ${setupGuideHtml}
 </div>
 <div data-page-view="plan" hidden>${planHtml}</div>
 <div data-page-view="products" hidden>
+${productAutomaticHtml}
 ${productInclusionHtml}
 ${productHtml}
 </div>

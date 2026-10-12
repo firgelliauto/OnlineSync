@@ -6,7 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { encrypt } from '../src/security.mjs';
 import {adjustedPrice} from '../src/price-rules.mjs';
 import {createDraft} from '../src/product-drafts.mjs';
-import { draftPlan,productPlan,selectedFields,saveProductSettings,saveProductInclusion,productSettings,previewProduct,applyProductPreview,queueProduct,queueProductCatalog,processProductJob } from '../src/product-sync.mjs';
+import { draftPlan,productPlan,selectedFields,saveProductSettings,setProductAutomatic,saveProductInclusion,productSettings,previewProduct,applyProductPreview,queueProduct,queueProductCatalog,processProductJob } from '../src/product-sync.mjs';
 
 function adapter(sqlite){return {prepare(sql){const make=values=>({run:async()=>({meta:{changes:Number(sqlite.prepare(sql).run(...values).changes)}}),first:async()=>sqlite.prepare(sql).get(...values)??null,all:async()=>({results:sqlite.prepare(sql).all(...values)})});return {...make([]),bind:(...values)=>make(values)}},async batch(statements){sqlite.exec('BEGIN');try{const result=[];for(const s of statements)result.push(await s.run());sqlite.exec('COMMIT');return result}catch(e){sqlite.exec('ROLLBACK');throw e}}}}
 function product(id,title='Main title'){return {id,title,handle:'keep-this-url',descriptionHtml:'<p>Main description</p>',vendor:'Vendor',productType:'Type',tags:['b','a'],seo:{title:'SEO',description:'Search text'},currency:'USD',
@@ -42,6 +42,16 @@ async function fixture(count=2){
   };
   return {db,sqlite,shops,products,writes,sent,env,failure,group:{id:'group',main_shop:shops[0],role:'main'},close(){globalThis.fetch=originalFetch;sqlite.close()}};
 }
+test('automatic product switch saves independently while preserving fields, prices and the tag requirement',async()=>{
+ const f=await fixture();try{
+ await saveProductSettings(f.db,f.group,['title'],false,{});await saveProductInclusion(f.db,f.group,{enabled:true,readyTag:'Ready'});
+ const before=await productSettings(f.db,f.group.id),on=await setProductAutomatic(f.db,f.group,true);
+ assert.equal(on.enabled,true);assert.deepEqual(on.fields,before.fields);assert.deepEqual(on.priceRules,before.priceRules);assert.deepEqual(on.inclusion,before.inclusion);
+ const off=await setProductAutomatic(f.db,f.group,false);assert.equal(off.enabled,false);assert.deepEqual(off.fields,['title']);assert.equal(off.inclusion.readyTag,'Ready');
+ await assert.rejects(setProductAutomatic(f.db,{...f.group,role:'child'},true),/main store/);await assert.rejects(setProductAutomatic(f.db,f.group,'true'),/On or Off/);
+ }finally{f.close()}
+});
+
 test('ready tags gate manual previews and automatic jobs; manual catalog works with automatic Off',async()=>{
  const f=await fixture();try{
   await saveProductSettings(f.db,f.group,['title'],false,{});

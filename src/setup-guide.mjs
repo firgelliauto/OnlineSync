@@ -34,7 +34,7 @@ function renderSetupGuide(data){
  const products=[
  ['Choose product fields','Use unique variant SKUs in each store; duplicate SKUs block the product preview. Open Product Synchronization in your main store. Choose the titles, descriptions, images, prices or other fields to copy, configure price rules if needed, then save your settings. Inventory synchronization is configured separately.','Choose product fields','products','productPanel'],
  ['Review and copy your first product','Approve product access in each connected store. Enter a main-store variant SKU, prepare a preview and review the differences. Apply the changes, then check Product activity for results. Missing products can be created as drafts for review.','Review product preview','products','productPreviewForm'],
- ['Enable automatic product synchronization','Enable automatic copying in Product Synchronization and save your settings. Future main-store product changes will copy the selected fields to connected stores. Keep unselected fields local.','Configure automatic copying','products','productAutomatic']
+ ['Enable automatic product synchronization','Select On in Automatic product synchronization. This setting saves automatically. Future main-store product changes will copy the selected fields to connected stores. Keep unselected fields local.','Configure automatic copying','products','productAutomaticPanel']
  ];
  const initial=setupGuideGroup!==data.group.id;setupGuideGroup=data.group.id;if(initial){$('inventorySetup').open=inventoryCount<5;$('productSetup').open=inventoryCount===5&&productCount<3;}
  for(const [id,steps,done] of [['setupSteps',descriptions,inventoryDone],['productSetupSteps',products,productDone]]){
