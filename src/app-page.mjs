@@ -1,5 +1,5 @@
 import { productInclusionHtml, productInclusionScript } from './product-inclusion-page.mjs';
-import { classificationHtml, classificationScript } from './inventory-classification-page.mjs';
+import { classificationHtml, classificationCss, classificationScript } from './inventory-classification-page.mjs';
 import { backupHtml, backupScript } from './inventory-backup-page.mjs';
 import { planCss, planHtml, planScript } from './plan-page.mjs';
 import { safetyNetHtml, safetyNetScript } from './inventory-safety-net-page.mjs';
@@ -28,6 +28,7 @@ ul{padding-left:20px;color:#334b43}li{margin:6px 0}.small{font-size:12px;color:#
 @media(max-width:640px){.cards,.page-links{grid-template-columns:1fr}header{display:block}main{padding:20px 14px 50px}.activity-toolbar{flex-wrap:wrap}.activity-entry{grid-template-columns:1fr auto}.activity-entry .activity-badge{grid-column:1/-1}.activity-head{align-items:flex-start;flex-direction:column}}
 ${setupGuideCss}
 ${inventorySettingsCss}
+${classificationCss}
 ${productCss}
 ${planCss}</style></head><body>
 <s-app-nav>
