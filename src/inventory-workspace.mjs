@@ -5,7 +5,7 @@ function enabled(settings,key){return key==='automatic'?settings.mode==='all':fl
 async function modes(db,id){return {shared:await inventorySettings(db,id,'shared'),one_way:await inventorySettings(db,id,'one_way')}}
 export async function inventoryWorkspace(db,id){const row=await db.prepare('SELECT features FROM inventory_workspaces WHERE group_id=?').bind(id).first(),settings=await modes(db,id);const active=Object.keys(INVENTORY_FEATURES).filter(key=>Object.values(settings).some(s=>enabled(s,key)));return {configured:Boolean(row),features:[...new Set([...(row?JSON.parse(row.features):['automatic']),...active])],enabled:active}}
 export async function saveInventoryWorkspace(db,group,input){
- if(group.role!=='main')throw Object.assign(new Error('Open the main store to customize inventory'),{status:403});
+ if(group.role!=='main')throw Object.assign(new Error('Open the main store to customize sync options'),{status:403});
  if(!Array.isArray(input.features)||input.features.length>5||input.features.some(key=>!Object.hasOwn(INVENTORY_FEATURES,key)))throw Object.assign(new Error('Choose supported inventory features'),{status:400});
  return withInventoryLock(db,group,async()=>{const settings=await modes(db,group.id),hidden=Object.keys(INVENTORY_FEATURES).filter(key=>!input.features.includes(key)),disabled=hidden.filter(key=>Object.values(settings).some(s=>enabled(s,key)));
  if(disabled.length&&input.disableRemoved!==true)throw Object.assign(new Error('Confirm turning Off the active features you are removing'),{status:409});

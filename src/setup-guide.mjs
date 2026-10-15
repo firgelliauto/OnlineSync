@@ -22,7 +22,7 @@ let setupGuideGroup=null;
 function renderSetupGuide(data){
  const inventoryDone=setupSteps(data),productDone=productSetupSteps(data);
  const inventoryCount=inventoryDone.filter(Boolean).length,productCount=productDone.filter(Boolean).length;
- $('setupSummary').textContent=data.group.role==='main'?'Set up inventory synchronization, product synchronization, or both. Use Customize inventory to choose which inventory sections you see. Expand a section for the setup steps. Understand your synchronization options explains each mode, rule and recovery tool.':'Shared settings are managed from your main store. Inventory and product synchronization are optional.';
+ $('setupSummary').textContent=data.group.role==='main'?'Set up inventory synchronization, product synchronization, or both. Use Customize sync options to choose which inventory sections you see. Expand a section for the setup steps. Understand your synchronization options explains each mode, rule and recovery tool.':'Shared settings are managed from your main store. Inventory and product synchronization are optional.';
  for(const [prefix,done] of [['inventorySetup',inventoryDone],['productSetup',productDone]]){const count=done.filter(Boolean).length;$(prefix+'Progress').value=count;$(prefix+'Count').textContent=count+'/'+done.length+' tasks completed'}
  const descriptions=[
  ['Connect your stores','Choose the store with the starting stock as your main store. Install OnlineSync in every store you want to connect (2–6 stores total). Create a pairing code in the main store, then enter it under Join group in each additional store. Use a new code for each store. Connect all stores before your first synchronization.','Connect stores','home','pairPanel'],
