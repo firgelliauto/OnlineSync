@@ -28,7 +28,7 @@ function initializeSectionPanels(){
   const key='onlinesync:section:'+new URLSearchParams(location.search).get('shop')+':'+panel.id;
   try{const saved=localStorage.getItem(key);if(saved!==null&&panel.id!=='productPanel')details.open=saved==='open'}catch{}
   summary.append(heading);
-  if(panel.id==='inventorySelectionPanel'){for(const id of ['includedSwitch','excludedSwitch'])summary.append($(id))}
+  if(panel.id==='inventorySelectionPanel'){for(const id of ['includedSwitch'])summary.append($(id))}
   else {const control=panel.querySelector('.inventory-switch');if(control)summary.append(control)}
   while(panel.firstChild)body.append(panel.firstChild);
   // On/Off controls act independently of the disclosure header.

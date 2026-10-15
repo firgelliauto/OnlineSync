@@ -164,11 +164,12 @@ async function persistInventorySettings(db,group,settings,inventoryMode) {
 
 export async function setInventorySection(db,group,input) {
   if(group.role!=='main')fail('Open the main store to change inventory rules',403);
-  const fields={automatic:'mode',included:'includesEnabled',excluded:'excludesEnabled',mappings:'mappingsEnabled',tags:'tagsEnabled',collections:'collectionsEnabled'};
+  const fields={special:'special',automatic:'mode',included:'includesEnabled',excluded:'excludesEnabled',mappings:'mappingsEnabled',tags:'tagsEnabled',collections:'collectionsEnabled'};
   if(!input||!Object.hasOwn(fields,input.section)||typeof input.enabled!=='boolean')fail('Choose a section and On or Off',400);
   return withInventoryLock(db,group,async()=>{
     // Read under the configuration lock; switches never consume unsaved form edits.
     const saved=await inventorySettings(db,group.id,input.inventoryMode);
+    if(input.section==='special'){const settings={...saved,includesEnabled:input.enabled,excludesEnabled:input.enabled};await persistInventorySettings(db,group,settings,input.inventoryMode);return settings;}
     const field=fields[input.section],value=input.section==='automatic'?(input.enabled?'all':'selected'):input.enabled;
     if(saved[field]===value)return saved;
     const settings={...saved,[field]:value};
