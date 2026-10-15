@@ -1,4 +1,4 @@
-import {workspaceCss,workspaceHomeHtml,workspaceToolbarHtml,workspaceDialogHtml,workspaceScript} from './inventory-workspace-page.mjs';
+import {workspaceCss,workspaceToolbarHtml,workspaceDialogHtml,workspaceScript} from './inventory-workspace-page.mjs';
 import {inventoryModeHtml,inventoryModeScript,inventoryModeCss} from './inventory-mode-page.mjs';
 import {productBackupHtml,productBackupScript} from './product-backup-page.mjs';
 import { sectionPanelsCss, sectionPanelsScript } from './section-panels.mjs';
@@ -50,7 +50,6 @@ ${planCss}</style></head><body>
 <nav class="app-nav" aria-label="OnlineSync pages"><a data-page="home" href="/" aria-current="page">Home</a><a data-page="inventory" href="/inventory">Inventory Synchronization</a><a data-page="products" href="/products">Product Synchronization</a><a data-page="plan" href="/plan">Plan</a></nav>
 <div id="message" class="notice">Connecting to Shopify…</div>
 <div data-page-view="home">
-${workspaceHomeHtml}
 ${setupGuideHtml}
 <div class="cards" id="overviewCards"><div class="card"><div class="label">Synchronization status</div><div class="value" id="state">—</div></div><div class="card"><div class="label">Connected stores</div><div class="value" id="storesCount">—</div></div><div class="card"><div class="label">Matching SKUs</div><div class="value" id="links">—</div></div><div class="card"><div class="label">Requires review</div><div class="value" id="blocked">—</div></div></div>
 <section class="panel" id="storesPanel"><h2>Your store group</h2><p id="mainStore">Loading…</p><div class="store-table-wrap"><table class="store-table"><thead><tr><th>Role</th><th>Store name</th><th>Connection</th><th></th></tr></thead><tbody id="stores"></tbody></table></div><p class="small">Names are shared across this group. The main store can rename all stores; each connected store can rename itself. Leave a name empty to use its Shopify store handle.</p><p class="small">Connect up to six stores: one main store and five additional stores. The main store supplies starting quantities. Choose Shared Stock to combine changes from all stores, or One-way Inventory to copy main-store quantities outward. Product-page copying is configured separately.</p></section>
