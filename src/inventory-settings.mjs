@@ -3,6 +3,7 @@ import { adminGraphql } from './shopify.mjs';
 
 const fail = (message, status = 409) => { throw Object.assign(new Error(message), { status }); };
 export const defaults = () => ({ mode: 'all', includesEnabled: true, excludesEnabled: true, mappingsEnabled: true, tagsEnabled:true,collectionsEnabled:true, includedSkus: [], includedTags: [], includedCollections: [], excludedSkus: [], excludedTags: [], excludedCollections: [], mappings: [] });
+export const newInstallSettings=()=>({...defaults(),mode:'selected',includesEnabled:false,excludesEnabled:false,mappingsEnabled:false,tagsEnabled:false,collectionsEnabled:false});
 export function effectiveInventorySettings(settings) {
   const active = { ...defaults(), ...settings };
   if (!active.includesEnabled) active.includedSkus=[];

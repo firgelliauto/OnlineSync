@@ -51,12 +51,12 @@ test('pairing moves an installed child store to the main group once', async () =
   sqlite.close();
 });
 
-test('pairing admits only three children even with multiple outstanding codes and invalidates the old preview', async () => {
+test('pairing admits only five children even with multiple outstanding codes and invalidates the old preview', async () => {
   const sqlite = new DatabaseSync(':memory:');
   sqlite.exec(readFileSync(new URL('../migrations/0001_initial.sql', import.meta.url), 'utf8'));
   sqlite.exec(readFileSync(new URL('../migrations/0004_preview_marker.sql', import.meta.url), 'utf8'));
   try {
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 7; i++) {
       const shop = `store${i}.myshopify.com`;
       sqlite.prepare(`INSERT INTO stores (shop,access_token_cipher,refresh_token_cipher,token_expires_at,refresh_expires_at)
         VALUES (?,'x','x',1,1)`).run(shop);
@@ -64,14 +64,14 @@ test('pairing admits only three children even with multiple outstanding codes an
       sqlite.prepare("INSERT INTO group_stores (group_id,shop,role) VALUES (?,?,'main')").run('group'+i,shop);
     }
     const db = adapter(sqlite);
-    const codes = await Promise.all(Array.from({length:4},()=>createPairingCode(db,'group0')));
+    const codes = await Promise.all(Array.from({length:6},()=>createPairingCode(db,'group0')));
     sqlite.exec(`UPDATE sync_groups SET preview_completed_at=CURRENT_TIMESTAMP WHERE id='group0';
       INSERT INTO inventory_links (id,group_id,sku,shared_quantity,status) VALUES ('preview','group0','SKU',10,'preview');`);
     const results = await Promise.all(codes.map(({code},i)=>redeemPairingCode(db,`store${i+1}.myshopify.com`,'group'+(i+1),code)));
-    // Concurrent redemptions can finish in any order; exactly three may join.
-    assert.equal(results.filter(Boolean).length,3);
+    // Concurrent redemptions can finish in any order; exactly five may join.
+    assert.equal(results.filter(Boolean).length,5);
     const rejected=results.indexOf(false)+1;
-    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM group_stores WHERE group_id='group0'").get().count,4);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM group_stores WHERE group_id='group0'").get().count,6);
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM inventory_links WHERE group_id='group0'").get().count,0);
     assert.equal(sqlite.prepare("SELECT preview_completed_at FROM sync_groups WHERE id='group0'").get().preview_completed_at,null);
     assert.ok(sqlite.prepare('SELECT id FROM sync_groups WHERE id=?').get('group'+rejected));

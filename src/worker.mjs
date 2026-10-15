@@ -9,7 +9,7 @@ import { createPairingCode, redeemPairingCode, MAX_GROUP_STORES } from './pairin
 import { appPage } from './app-page.mjs';
 import { customerActivity } from './customer-activity.mjs';
 import { saveStoreName, storeName } from './store-names.mjs';
-import { inventorySettings, saveInventorySettings, setInventorySection, catalogOptions, inventoryMatches, withInventoryLock, populateCollections } from './inventory-settings.mjs';
+import { inventorySettings, newInstallSettings, saveInventorySettings, setInventorySection, catalogOptions, inventoryMatches, withInventoryLock, populateCollections } from './inventory-settings.mjs';
 import { exportActivity } from './activity-export.mjs';
 import { publicPage } from './public-pages.mjs';
 import { activeSubscription, refreshSubscriptionSnapshots } from './billing.mjs';
@@ -37,7 +37,7 @@ async function currentGroup(db, shop) {
     .bind(shop).first();
 }
 
-async function bootstrap(db, shop, token, env) {
+export async function bootstrap(db, shop, token, env) {
   const store = await db.prepare('SELECT uninstalled_at FROM stores WHERE shop = ?').bind(shop).first();
   if (!store || store.uninstalled_at) {
     await saveToken(db, shop, await exchangeOfflineToken(shop, token, env), env);
@@ -45,8 +45,7 @@ async function bootstrap(db, shop, token, env) {
   let group = await currentGroup(db, shop);
   if (!group) {
     const groupId = crypto.randomUUID();
-    await db.prepare('INSERT OR IGNORE INTO sync_groups (id, main_shop) VALUES (?, ?)')
-      .bind(groupId, shop).run();
+    await db.batch([db.prepare('INSERT OR IGNORE INTO sync_groups (id, main_shop) VALUES (?, ?)').bind(groupId,shop),db.prepare('INSERT OR IGNORE INTO inventory_settings(group_id,settings) SELECT id,? FROM sync_groups WHERE id=?').bind(JSON.stringify(newInstallSettings()),groupId)]);
     const ownerGroup = await db.prepare('SELECT id FROM sync_groups WHERE main_shop = ?').bind(shop).first();
     await db.prepare(`INSERT OR IGNORE INTO group_stores (group_id, shop, role)
       VALUES (?, ?, 'main')`).bind(ownerGroup.id, shop).run();
@@ -109,7 +108,7 @@ async function preview(db, group, env) {
   if (members.length < 2 || members.some(m => !m.location_id)) {
     return json({ error: 'Connect at least two stores and choose a location in each' }, 409);
   }
-  if (members.length > MAX_GROUP_STORES) return json({ error: 'Groups support up to four stores' }, 409);
+  if (members.length > MAX_GROUP_STORES) return json({ error: 'Groups support up to six stores' }, 409);
   const main = members.find(m => m.role === 'main');
   const children = members.filter(m => m.role === 'child');
   const settings = await inventorySettings(db,group.id);
@@ -173,7 +172,7 @@ async function control(db, group, env, input) {
   if (stores.length < 2 || stores.some(s => !s.location_id || s.uninstalled_at)) {
     return json({ error: 'Connect and configure at least two installed stores' }, 409);
   }
-  if (stores.length > MAX_GROUP_STORES) return json({ error: 'Groups support up to four stores' }, 409);
+  if (stores.length > MAX_GROUP_STORES) return json({ error: 'Groups support up to six stores' }, 409);
   if (!shopsAllowedToWrite(env, stores.map(store => store.shop))) {
     return json({ error: 'Inventory writes are restricted to the configured pilot stores' }, 409);
   }
@@ -370,7 +369,7 @@ async function merchantApi(request, env, path) {
       const input = await request.json();
       const joined = await redeemPairingCode(db, user.shop, group.id,
         String(input.code ?? '').trim().toUpperCase());
-      if (!joined) return json({ error: 'Code invalid, expired, or unavailable. Groups support up to four stores; connect them before starting sync.' }, 400);
+      if (!joined) return json({ error: 'Code invalid, expired, or unavailable. Groups support up to six stores; connect them before starting sync.' }, 400);
       return json(await status(db, user.shop, env));
     }
     if (path === '/api/preview' && request.method === 'POST') return await withInventoryLock(db,group,()=>preview(db, group, env));

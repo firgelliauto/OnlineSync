@@ -6,7 +6,7 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { encrypt } from '../src/security.mjs';
 import worker from '../src/worker.mjs';
 
-for (const storeCount of [2,3,4]) test(`a ${storeCount}-store paginated 260-variant preview respects D1 limits and excludes all duplicate SKUs`, async () => {
+for (const storeCount of [2,3,4,5,6]) test(`a ${storeCount}-store paginated 260-variant preview respects D1 limits and excludes all duplicate SKUs`, async () => {
   const sqlite = new DatabaseSync(':memory:');
   const originalFetch = globalThis.fetch;
   const boundCounts = [];
@@ -18,7 +18,7 @@ for (const storeCount of [2,3,4]) test(`a ${storeCount}-store paginated 260-vari
     const key = randomBytes(32).toString('base64');
     const now = Math.floor(Date.now() / 1000);
     const access = await encrypt('test-token', key);
-    const shops = ['main.myshopify.com', 'child.myshopify.com', 'third.myshopify.com', 'fourth.myshopify.com'].slice(0,storeCount);
+    const shops = ['main.myshopify.com', 'child.myshopify.com', 'third.myshopify.com', 'fourth.myshopify.com','fifth.myshopify.com','sixth.myshopify.com'].slice(0,storeCount);
     for (const shop of shops) {
       sqlite.prepare(`INSERT INTO stores
         (shop,access_token_cipher,refresh_token_cipher,token_expires_at,refresh_expires_at)
@@ -94,9 +94,9 @@ for (const storeCount of [2,3,4]) test(`a ${storeCount}-store paginated 260-vari
     const statusResponse = await worker.fetch(new Request('https://example.test/api/status',
       {headers:{Authorization:`Bearer ${token}`}}),env);
     const status = await statusResponse.json();
-    assert.equal(status.maxStores,4);
+    assert.equal(status.maxStores,6);
     assert.equal(status.stores.length,storeCount);
-    assert.equal(status.canPair,storeCount<4);
+    assert.equal(status.canPair,storeCount<6);
     const inventory = async params => {
       const response = await worker.fetch(new Request('https://example.test/api/inventory?' + params,
         { headers: { Authorization: `Bearer ${token}` } }), env);

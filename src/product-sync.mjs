@@ -1,3 +1,4 @@
+import {MAX_GROUP_STORES} from './pairing.mjs';
 import {portableMetafields,variantExtraValue,assignVariantField,metafieldChanges} from './product-extra-fields.mjs';
 import { reserveSyncedSkus, assertSkuPlan } from './sku-plans.mjs';
 import { inclusionDefaults, normalizeInclusion, productIncluded } from './product-inclusion.mjs';
@@ -136,7 +137,7 @@ export async function saveProductSettings(db,group,fields,enabled,priceRules){
     ...(fields.length?[]:[db.prepare("DELETE FROM synced_skus WHERE group_id=? AND kind='product'").bind(group.id)])]);
   return productSettings(db,group.id);
 }
-async function connected(db,groupId){const members=(await db.prepare(`SELECT gs.shop,gs.role,s.uninstalled_at FROM group_stores gs JOIN stores s ON s.shop=gs.shop WHERE gs.group_id=? ORDER BY gs.role DESC,gs.shop`).bind(groupId).all()).results;if(members.length<2||members.length>4||members.some(s=>s.uninstalled_at))fail('Connect two to four installed stores first');return members}
+async function connected(db,groupId){const members=(await db.prepare(`SELECT gs.shop,gs.role,s.uninstalled_at FROM group_stores gs JOIN stores s ON s.shop=gs.shop WHERE gs.group_id=? ORDER BY gs.role DESC,gs.shop`).bind(groupId).all()).results;if(members.length<2||members.length>MAX_GROUP_STORES||members.some(s=>s.uninstalled_at))fail('Connect two to six installed stores first');return members}
 async function snapshot(db,group,sourceId,fields,env,{createMissing=false,offerMissing=false,priceRules={},inclusion=inclusionDefaults(),skipExcluded=false,matchBy='sku',creationOnly=false,metafieldKeys=[]}={}){
   const members=await connected(db,group.id);const source=await readProduct(db,group.main_shop,sourceId,env,fields);
   if(!await productIncluded(db,group.main_shop,source,inclusion,env)){if(skipExcluded)return null;fail('This main-store product does not have the required synchronization tag');}

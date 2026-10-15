@@ -1,5 +1,5 @@
 import { sha256 } from './security.mjs';
-export const MAX_GROUP_STORES = 4;
+export const MAX_GROUP_STORES = 6;
 
 export function makePairingCode() {
   const bytes = crypto.getRandomValues(new Uint8Array(12));
@@ -13,7 +13,7 @@ export async function createPairingCode(db, groupId) {
   const result = await db.prepare(`INSERT INTO pairing_codes (code_hash, group_id, expires_at)
     SELECT ?, ?, ? WHERE (SELECT COUNT(*) FROM group_stores WHERE group_id = ?) < ${MAX_GROUP_STORES}`)
     .bind(codeHash, groupId, expiresAt, groupId).run();
-  if (!result.meta.changes) { const error = new Error('This group already has four stores'); error.status = 409; throw error; }
+  if (!result.meta.changes) { const error = new Error('This group already has six stores'); error.status = 409; throw error; }
   return { code, expiresAt };
 }
 

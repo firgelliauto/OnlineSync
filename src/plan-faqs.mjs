@@ -1,8 +1,8 @@
 export const planFAQs=[
  ['Plans and billing',[
- ['What plans are available?','Basic supports up to 100 synchronized SKUs at $14.99 USD/month or $143.90 USD/year. Plus supports 101+ synchronized SKUs at $24.99 USD/month or $239.90 USD/year. One subscription covers a group of 2–4 Shopify stores.'],
+ ['What plans are available?','Basic supports up to 100 synchronized SKUs at $14.99 USD/month or $143.90 USD/year. Plus supports 101+ synchronized SKUs at $24.99 USD/month or $239.90 USD/year. One subscription covers a group of 2–6 Shopify stores.'],
  ['How much do I save with annual billing?','Annual billing saves 20%, rounded to cents: Basic costs $143.90 USD/year and Plus costs $239.90 USD/year. Annual subscriptions are billed upfront.'],
- ['Do monthly and annual plans include different features?','No. Both tiers and billing options include the same features and support up to four connected stores.'],
+ ['Do monthly and annual plans include different features?','No. Both tiers and billing options include the same features and support up to six connected stores.'],
  ['How are synchronized SKUs counted?','Each distinct main-store SKU enrolled in inventory or product synchronization counts once across the group, including variants. Using it in multiple stores or in both types of synchronization does not multiply the count. Pausing keeps enrolled SKUs counted; removing inventory rules or clearing product synchronization fields releases the corresponding enrollment.'],
  ['What happens when Basic exceeds 100 synchronized SKUs?','OnlineSync blocks additional enrollment until you reduce the selection or choose Plus in Shopify. It never upgrades your plan or changes your charge without your approval. A downgrade to Basic while over 100 pauses inventory and blocks product copying until usage is reduced.'],
  ['Is there a free trial?','Both tiers offer a 7-day trial for eligible subscriptions. Shopify shows your trial eligibility, billing dates and final terms before you approve a subscription. Changing billing options does not guarantee another trial.'],
@@ -17,10 +17,10 @@ export const planFAQs=[
  ['Getting started and connected stores',[
  ['What does OnlineSync do?','OnlineSync connects Shopify stores to share inventory quantities and copy selected product-page fields. Inventory changes can flow from any connected store. Product-page changes flow from the main store to its connected stores.'],
  ['Do I need both inventory and product synchronization?','No. Configure inventory synchronization, product synchronization, or both. The Home setup guide has separate optional sections and progress counts.'],
- ['How many stores can I connect?','Connect two, three or four Shopify stores in one group: one main store and up to three connected stores.'],
+ ['How many stores can I connect?','Connect two to six Shopify stores in one group: one main store and up to five connected stores.'],
  ['How do I choose the main store?','Use the store whose initial inventory quantities and product content you want the other stores to use. Its subscription covers the group, and its app controls shared settings.'],
  ['How do I pair another store?','Install OnlineSync in each store. Create a pairing code in the main store, then enter it under Join group in the additional store. Codes expire after ten minutes and work once; create a new code for each store.'],
- ['Why can’t I add another store?','Groups are limited to four stores. Connections are also locked after inventory has been established. Connect all intended stores before the first activation; contact support if an established group needs to be reconfigured.'],
+ ['Why can’t I add another store?','Groups are limited to six stores. Connections are also locked after inventory has been established. Connect all intended stores before the first activation; contact support if an established group needs to be reconfigured.'],
  ['Can I rename my stores?','Yes. Edit Store name in Your store group on Home. The main store can rename all group members; connected stores can rename themselves. Display names do not change Shopify domains or product identifiers.'],
  ['Can I synchronize WooCommerce, Amazon or other platforms?','OnlineSync currently supports Shopify stores only.'],
  ['Why are some controls unavailable in a connected store?','Shared rules, product settings, plan management and inventory activation are managed from the main store. Each connected store selects its own inventory location and approves its own product access.']

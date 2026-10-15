@@ -108,8 +108,8 @@ async function setup(main = 10, child = 10, initialized = 1, extraStores = []) {
     close() { globalThis.fetch = originalFetch; sqlite.close(); } };
 }
 
-for (const storeCount of [2,3,4]) test(storeCount+'-store initial copy and sales from every store update their peers without echoing', async () => {
-  const state = await setup(10,8,0,['third.myshopify.com','fourth.myshopify.com'].slice(0,storeCount-2));
+for (const storeCount of [2,3,4,5,6]) test(storeCount+'-store initial copy and sales from every store update their peers without echoing', async () => {
+  const state = await setup(10,8,0,['third.myshopify.com','fourth.myshopify.com','fifth.myshopify.com','sixth.myshopify.com'].slice(0,storeCount-2));
   try {
     await processLink(state.env,'link');
     assert.equal(state.writes.length,storeCount-1);
@@ -300,7 +300,7 @@ test('stock changing before a failed write retries blocks instead of overwriting
   } finally { state.close(); }
 });
 
-test('one-way inventory copies the main quantity and never sends destination sales back to the main store',async()=>{
- const state=await setup(10,10,1,['third.myshopify.com']);
- try{state.sqlite.exec("UPDATE sync_groups SET inventory_mode='one_way' WHERE id='group'");state.quantities['child.myshopify.com']=8;state.quantities['third.myshopify.com']=7;await processLink(state.env,'link');assert.equal(state.quantities['main.myshopify.com'],10);assert.equal(state.quantities['child.myshopify.com'],10);assert.equal(state.quantities['third.myshopify.com'],10);assert.ok(state.writes.every(w=>w.shop!=='main.myshopify.com'));state.quantities['main.myshopify.com']=12;await processLink(state.env,'link');assert.equal(state.quantities['main.myshopify.com'],12);assert.equal(state.quantities['child.myshopify.com'],12);assert.equal(state.quantities['third.myshopify.com'],12)}finally{state.close()}
+for(const count of [3,6])test(count+'-store one-way inventory copies the main quantity and never sends destination sales back to the main store',async()=>{
+ const state=await setup(10,10,1,['third.myshopify.com','fourth.myshopify.com','fifth.myshopify.com','sixth.myshopify.com'].slice(0,count-2));
+ try{state.sqlite.exec("UPDATE sync_groups SET inventory_mode='one_way' WHERE id='group'");state.quantities['child.myshopify.com']=8;state.quantities['third.myshopify.com']=7;await processLink(state.env,'link');assert.equal(state.quantities['main.myshopify.com'],10);assert.equal(state.quantities['child.myshopify.com'],10);assert.equal(state.quantities['third.myshopify.com'],10);assert.ok(state.writes.every(w=>w.shop!=='main.myshopify.com'));state.quantities['main.myshopify.com']=12;await processLink(state.env,'link');assert.equal(state.quantities['main.myshopify.com'],12);assert.equal(state.quantities['child.myshopify.com'],12);assert.equal(state.quantities['third.myshopify.com'],12);assert.ok(Object.values(state.quantities).every(q=>q===12))}finally{state.close()}
 });

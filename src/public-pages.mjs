@@ -30,7 +30,7 @@ export function publicPage(path) {
 <p>OnlineSync starts with the main store's quantity, then keeps the selected inventory locations aligned when stock changes in a connected store.</p>
 <div class="card"><h2 style="margin-top:0">Get help</h2><p>Email ${contact}. Include your store domain, the SKU involved, the time of the issue, and what you expected to happen. Never send an API token or password.</p></div>
 <h2>Set up a store group</h2><ol>
-<li>Install OnlineSync in up to four Shopify stores you manage: one main store and up to three additional stores. The main store's subscription covers this group.</li>
+<li>Install OnlineSync in up to four Shopify stores you manage: one main store and up to five additional stores. The main store's subscription covers this group.</li>
 <li>Open the main store's app and create a separate pairing code for each additional store. Enter it in that store's app within 10 minutes. Each code can be used once. Connect all stores before starting synchronization; each new connection clears the earlier preview.</li>
 <li>Choose the inventory location to share in each store. Check that this is the location used for your orders.</li>
 <li>Use the same unique SKU in every store for each product variant, or add a Manual SKU mapping on Inventory synchronization when a connected store uses a different SKU. Inventory must be tracked, the product must be physical, and selling when out of stock must be off.</li>

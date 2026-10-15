@@ -103,7 +103,7 @@ test('options use existing variant IDs with no inventory or SKU changes and mism
   const plan=await productPlan(source,target,['options']);assert.deepEqual(plan.input.variants.map(v=>v.id),target.variants.map(v=>v.id));assert.ok(plan.input.variants.every(v=>!('inventoryQuantities'in v)&&!('sku'in v)));assert.equal(plan.input.productOptions[0].name,'Size');
   target.variants.pop();await assert.rejects(productPlan(source,target,['title']),/SKU sets differ/);
 });
-for(const count of [2,3,4])test(`product preview and price-only copy are scoped across ${count} stores`,async()=>{
+for(const count of [2,3,4,5,6])test(`product preview and price-only copy are scoped across ${count} stores`,async()=>{
   const f=await fixture(count);try{
     await saveProductSettings(f.db,f.group,['price'],false);const preview=await previewProduct(f.db,f.group,'SKU-0',f.env);
     assert.equal(preview.targets.length,count-1);assert.equal(f.writes.length,0);
@@ -156,7 +156,7 @@ test('per-store price rules isolate peers, respect field choices and invalidate 
   const plan=await productPlan(f.products.get(f.shops[0]),f.products.get(f.shops[1]),['compareAtPrice'],{percent:'10',amount:'3',applyToCompareAt:true});assert.equal(plan.variants[0].compareAtPrice,'30.50');
  }finally{f.close()}
 });
-for(const count of [2,3,4])test(`missing products require opt-in previews and create unpublished drafts across ${count} stores`,async()=>{
+for(const count of [2,3,4,5,6])test(`missing products require opt-in previews and create unpublished drafts across ${count} stores`,async()=>{
  const f=await fixture(count);try{
   for(const shop of f.shops.slice(1))f.products.delete(shop);
   await saveProductSettings(f.db,f.group,['price','descriptionHtml'],false,{[f.shops[1]]:{percent:'10'}});
