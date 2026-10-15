@@ -1,3 +1,4 @@
+import {productBackupPage,validateProductBackup,prepareProductRestore,reviewProductRestore,runProductRestore} from '../src/product-backup.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -27,13 +28,17 @@ async function fixture(count=2){
     if(query.includes('query DraftCurrency'))return Response.json({data:{shop:{currencyCode:failure.currency??'USD'}}});
     if(query.includes('query DraftHandle'))return Response.json({data:{productByIdentifier:p?.handle===variables.handle?{...p,variants:{nodes:p.variants,pageInfo:{hasNextPage:false}}}:null}});
     if(query.includes('mutation CreateSyncDraft')){writes.push({shop,...variables});const input=variables.input;const created={...product('gid://shopify/Product/999'),...input,currency:'USD',media:[],options:input.productOptions.map((o,i)=>({...o,id:'new-option-'+i,optionValues:o.values})),variants:input.variants.map((v,i)=>({...v,id:'new-variant-'+i,selectedOptions:v.optionValues.map(o=>({name:o.optionName,value:o.name}))}))};products.set(shop,created);if(failure.once){failure.once=false;throw Error('Response lost after draft creation')}return Response.json({data:{productSet:{product:{id:created.id,status:created.status},userErrors:[]}}});}
+    if(query.includes('query ProductExtra'))return Response.json({data:{product:{category:p.category||null,metafields:{nodes:p.metafields?.nodes||[],pageInfo:{hasNextPage:false}}}}});
+    if(query.includes('query VariantExtra'))return Response.json({data:{product:{variants:{nodes:p.variants.map(v=>({id:v.id,taxable:v.taxable??true,inventoryItem:v.inventoryItem??{unitCost:null,countryCodeOfOrigin:null,harmonizedSystemCode:null,measurement:{weight:{unit:'KILOGRAMS',value:0}}}})),pageInfo:{hasNextPage:false}}}}});
+    if(query.includes('query ProductBackupScan'))return Response.json({data:{products:{nodes:p?[{id:p.id}]:[],pageInfo:{hasNextPage:false}}}});
+    if(query.includes('mutation SyncMetafields')){writes.push({shop,...variables});p.metafields??={nodes:[]};for(const field of variables.fields){const old=p.metafields.nodes.find(m=>m.namespace===field.namespace&&m.key===field.key);if(old)Object.assign(old,field);else p.metafields.nodes.push({...field})}return Response.json({data:{metafieldsSet:{userErrors:[],metafields:[]}}})}
     if(query.includes('query SyncProduct'))return Response.json({data:{shop:{currencyCode:p.currency},product:{...p,variants:{nodes:p.variants,pageInfo:{hasNextPage:false}},media:{nodes:p.media,pageInfo:{hasNextPage:false}}}}});
     if(query.includes('query ProductInclusion'))return Response.json({data:{product:{c0:Boolean(failure.collectionMember)}}});
     if(query.includes('query ProductScan'))return Response.json({data:{products:{nodes:[{id:p.id}],pageInfo:{hasNextPage:false}}}});
     if(query.includes('query ProductScopes'))return Response.json({data:{currentAppInstallation:{accessScopes:[{handle:'write_products'},{handle:'read_files'}]}}});
     if(query.includes('query ExistingSyncImage'))return Response.json({data:{files:{nodes:[]}}});
     if(query.includes('mutation SyncProductFields')){writes.push({shop,...variables});const {input}=variables;
-      for(const key of ['title','descriptionHtml','vendor','productType','tags','seo','handle'])if(key in input)p[key]=input[key];
+      for(const key of ['title','descriptionHtml','vendor','productType','tags','seo','handle','category'])if(key in input)p[key]=input[key];
       if(input.files)p.media=input.files.map(f=>f.id?p.media.find(m=>m.id===f.id):({id:'copied-'+f.filename,alt:f.alt,mediaContentType:'IMAGE',status:'READY',image:{url:'https://cdn.shopify.com/'+f.filename}}));
       if(failure.once){failure.once=false;throw new Error('Response lost after product write')}
       return Response.json({data:{productSet:{product:{id:p.id},userErrors:[]}}});}
@@ -52,6 +57,26 @@ test('automatic product switch saves independently while preserving fields, pric
  }finally{f.close()}
 });
 
+test('barcode matching connects products with different SKUs and rejects duplicate barcodes',async()=>{
+ const f=await fixture();try{await saveProductSettings(f.db,f.group,['title'],false,{});f.products.get(f.shops[1]).variants.forEach((v,i)=>v.sku='LOCAL-'+i);assert.equal((await previewProduct(f.db,f.group,'SKU-0',f.env)).targets[0].missing,true);f.sqlite.exec("UPDATE product_sync_settings SET match_by='barcode' WHERE group_id='group'");const preview=await previewProduct(f.db,f.group,'code-0',f.env);await applyProductPreview(f.db,f.group,preview.id,f.env);assert.equal(f.products.get(f.shops[1]).title,'Main title');assert.equal(f.products.get(f.shops[1]).variants[0].sku,'LOCAL-0');f.products.get(f.shops[1]).variants[1].barcode='code-0';await assert.rejects(previewProduct(f.db,f.group,'code-0',f.env),/matching|unique/)}finally{f.close()}
+});
+test('creation-only automatic jobs create a missing draft once and never overwrite existing products',async()=>{
+ const f=await fixture();try{await saveProductSettings(f.db,f.group,['title'],true,{});f.sqlite.exec("UPDATE product_sync_settings SET creation_only=1 WHERE group_id='group'");f.products.delete(f.shops[1]);const source=f.products.get(f.shops[0]);await queueProduct(f.env,f.group.id,source.id);await processProductJob(f.env,f.sent.at(-1).productJobId);assert.equal(f.products.get(f.shops[1]).status,'DRAFT');const initialTitle=f.products.get(f.shops[1]).title;source.title='Later edit';await queueProduct(f.env,f.group.id,source.id);await processProductJob(f.env,f.sent.at(-1).productJobId);assert.equal(f.products.get(f.shops[1]).title,initialTitle);assert.equal(f.writes.length,1)}finally{f.close()}
+});
+test('signed product backups preview and restore supported fields without restoring quantities or bypassing conflicts',async()=>{
+ const f=await fixture();try{await saveProductSettings(f.db,f.group,['title'],false,{});const part=await productBackupPage(f.db,f.group,f.shops[0],null,f.env);const file={format:'OnlineSync product backup',version:1,parts:[part.part]};assert.equal((await validateProductBackup(file,f.group,f.env)).products.length,1);const tampered=structuredClone(file);tampered.parts[0].payload.products[0].title='Changed';await assert.rejects(validateProductBackup(tampered,f.group,f.env),/signature/);await assert.rejects(validateProductBackup(file,{...f.group,id:'other'},f.env),/another group/);
+ const source=f.products.get(f.shops[0]),title=source.title;source.title='Accidental edit';let preview=await prepareProductRestore(f.db,f.group,f.shops[0],file,f.env);preview=await reviewProductRestore(f.db,f.group,preview.id,f.env);assert.equal(preview.counts.pending,1,JSON.stringify(preview.sample));let result=await runProductRestore(f.db,f.group,preview.id,f.env);assert.equal(result.counts.restored,1);assert.equal(source.title,title);assert.ok(!JSON.stringify(f.writes).includes('inventoryQuantities'));
+ source.title='Another edit';preview=await prepareProductRestore(f.db,f.group,f.shops[0],file,f.env);await reviewProductRestore(f.db,f.group,preview.id,f.env);source.title='Concurrent edit';result=await runProductRestore(f.db,f.group,preview.id,f.env);assert.equal(result.counts.failed,1);assert.equal(source.title,'Concurrent edit');
+ }finally{f.close()}
+});
+test('optional fields use correct nested inputs and only portable selected metafields are written',async()=>{
+ const source=product('source'),target=product('target');source.category={id:'gid://shopify/TaxonomyCategory/aa',fullName:'Category'};target.category=null;
+ for(const v of source.variants){v.taxable=false;v.inventoryItem={unitCost:{amount:'3.25',currencyCode:'USD'},measurement:{weight:{unit:'KILOGRAMS',value:2}},countryCodeOfOrigin:'US',harmonizedSystemCode:'123456'}}
+ for(const v of target.variants){v.taxable=true;v.inventoryItem={unitCost:{amount:'1.00',currencyCode:'USD'},measurement:{weight:{unit:'KILOGRAMS',value:1}},countryCodeOfOrigin:'CA',harmonizedSystemCode:'654321'}}
+ source.metafields={nodes:[{namespace:'custom',key:'material',type:'single_line_text_field',value:'Steel'},{namespace:'custom',key:'photo',type:'file_reference',value:'gid://shopify/MediaImage/1'}]};target.metafields={nodes:[{namespace:'custom',key:'material',type:'single_line_text_field',value:'Wood',compareDigest:'digest'}]};
+ const plan=await productPlan(source,target,['category','cost','taxable','weight','countryCodeOfOrigin','harmonizedSystemCode','metafields']);assert.equal(plan.input.category,source.category.id);assert.equal(plan.variants[0].inventoryItem.cost,3.25);assert.equal(plan.variants[0].inventoryItem.countryCodeOfOrigin,'US');assert.equal(plan.variants[0].inventoryItem.harmonizedSystemCode,'123456');assert.deepEqual(plan.variants[0].inventoryItem.measurement.weight,{unit:'KILOGRAMS',value:2});assert.equal(plan.variants[0].taxable,false);assert.equal(plan.metafieldWrites.length,1);assert.equal(plan.metafieldWrites[0].compareDigest,'digest');assert.ok(!JSON.stringify(plan).includes('file_reference'));
+ const draft=await draftPlan(source,['cost','weight','metafields']);assert.equal(draft.input.variants[0].inventoryItem.tracked,true);assert.equal(draft.input.variants[0].inventoryItem.cost,3.25);assert.equal(draft.input.metafields.length,1);
+});
 test('ready tags gate manual previews and automatic jobs; manual catalog works with automatic Off',async()=>{
  const f=await fixture();try{
   await saveProductSettings(f.db,f.group,['title'],false,{});
@@ -174,4 +199,11 @@ test('draft previews reject cross-currency prices and a product appearing before
 test('new draft essentials do not copy unchecked content, stock or unsupported gift cards and bundles',async()=>{
  const source=product('source');const plan=await draftPlan(source,['title']);assert.equal(plan.input.title,source.title);assert.ok(!('descriptionHtml'in plan.input)&&!('files'in plan.input));assert.ok(plan.input.variants.every(v=>v.price==='0'&&!('inventoryQuantities'in v)));
  source.isGiftCard=true;await assert.rejects(draftPlan(source,['title']),/Gift cards/);source.isGiftCard=false;source.variants[0].requiresComponents=true;await assert.rejects(draftPlan(source,['title']),/bundle/);
+});
+
+test('barcode draft identity is retained when barcode is not selected as an ongoing field',async()=>{
+ const source=product('source');source.variants.forEach(v=>v.sku='');const plan=await draftPlan(source,['title'],{},[],'barcode');assert.deepEqual(plan.input.variants.map(v=>v.barcode),['code-0','code-1']);assert.ok(plan.input.variants.every(v=>v.sku===''));
+});
+test('same-store backup restores blank-SKU products by immutable Shopify IDs',async()=>{
+ const f=await fixture();try{await saveProductSettings(f.db,f.group,['title'],false);f.products.get(f.shops[0]).variants.forEach(v=>v.sku='');const part=await productBackupPage(f.db,f.group,f.shops[0],null,f.env);f.products.get(f.shops[0]).title='Changed';let value=await prepareProductRestore(f.db,f.group,f.shops[0],{format:'OnlineSync product backup',version:1,parts:[part.part]},f.env);value=await reviewProductRestore(f.db,f.group,value.id,f.env);assert.equal(value.counts.pending,1);assert.equal(value.sample[0].changes.find(c=>c.field==='title').after,'Main title');value=await runProductRestore(f.db,f.group,value.id,f.env);assert.equal(value.counts.restored,1);assert.equal(f.products.get(f.shops[0]).title,'Main title');assert.ok(f.products.get(f.shops[0]).variants.every(v=>v.sku===''));}finally{f.close()}
 });

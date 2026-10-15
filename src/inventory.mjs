@@ -1,7 +1,7 @@
 import { assertSkuPlan } from './sku-plans.mjs';
 import { adminGraphql } from './shopify.mjs';
 import { activeSubscription } from './billing.mjs';
-import { planSharedQuantity } from './sync-plan.mjs';
+import { planSharedQuantity,planOneWayQuantity } from './sync-plan.mjs';
 import { shopsAllowedToWrite } from './write-policy.mjs';
 import { recordIssue, resolveIssue } from './operations.mjs';
 import { checkLiveSelection } from './inventory-settings.mjs';
@@ -114,7 +114,7 @@ async function reconcile(db, link, members, env) {
   }
   const snapshot = members.map((m, i) => ({ shop: m.shop,
     before: m.last_quantity, now: quantities[i] }));
-  const plan = planSharedQuantity(link.shared_quantity, snapshot);
+  const plan = link.inventory_mode==='one_way'?planOneWayQuantity(link.main_shop,snapshot):planSharedQuantity(link.shared_quantity, snapshot);
   if (plan.status === 'blocked') { await block(db, link, plan.reason); return; }
   const statements = [db.prepare('UPDATE inventory_links SET shared_quantity = ? WHERE id = ?')
     .bind(plan.target, link.id)];
@@ -144,7 +144,7 @@ export async function processLink(env, linkId) {
     return job ? { retry: true, delaySeconds: 5 } : { retry: false };
   }
   try {
-    const link = await db.prepare(`SELECT l.*, g.main_shop, g.status AS group_status,
+    const link = await db.prepare(`SELECT l.*, g.main_shop, g.inventory_mode, g.status AS group_status,
       (g.preview_completed_at IS NULL AND EXISTS(SELECT 1 FROM inventory_settings s WHERE s.group_id=g.id)) AS rules_refresh_pending
       FROM inventory_links l JOIN sync_groups g ON g.id = l.group_id WHERE l.id = ?`)
       .bind(linkId).first();

@@ -13,3 +13,9 @@ export function planSharedQuantity(shared, members) {
   return { status: 'ready', target,
     writes: members.filter(m => m.now !== target).map(m => ({ shop: m.shop, from: m.now, to: target })) };
 }
+
+export function planOneWayQuantity(mainShop,members){
+ const main=members.find(m=>m.shop===mainShop);
+ if(!main||members.length<2||members.some(m=>!Number.isInteger(m.now)||m.now<0))throw new Error('Invalid one-way inventory snapshot');
+ return {status:'ready',target:main.now,writes:members.filter(m=>m.shop!==mainShop&&m.now!==main.now).map(m=>({shop:m.shop,from:m.now,to:main.now}))};
+}

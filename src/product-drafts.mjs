@@ -10,11 +10,11 @@ export async function createDraft(db,group,source,shop,input,env){
   if(!claim.meta.changes)stop('A draft creation is already in progress');
   try{
     const record=await db.prepare('SELECT * FROM product_draft_creations WHERE group_id=? AND source_id=? AND shop=?').bind(group.id,source.id,shop).first();
-    const data=await adminGraphql(db,shop,env,`query DraftHandle($handle:String!){productByIdentifier(identifier:{handle:$handle}){id handle status variants(first:250){nodes{sku} pageInfo{hasNextPage}}}}`,{handle});
+    const data=await adminGraphql(db,shop,env,`query DraftHandle($handle:String!){productByIdentifier(identifier:{handle:$handle}){id handle status variants(first:250){nodes{sku barcode} pageInfo{hasNextPage}}}}`,{handle});
     if(data.productByIdentifier){
       const found=data.productByIdentifier;
-      const skus=found.variants.nodes.map(v=>v.sku?.trim()).sort();
-      if(!record.attempted||found.variants.pageInfo.hasNextPage||JSON.stringify(skus)!==JSON.stringify(source.variants.map(v=>v.sku.trim()).sort()))stop('A product already uses the draft handle; review its identity');
+      const skus=found.variants.nodes.map(v=>(v.sku||'').trim()).sort();
+      if(!record.attempted||found.variants.pageInfo.hasNextPage||JSON.stringify(skus)!==JSON.stringify(source.variants.map(v=>(v.sku||'').trim()).sort()))stop('A product already uses the draft handle; review its identity');
       await db.prepare('UPDATE product_draft_creations SET product_id=? WHERE group_id=? AND source_id=? AND shop=?').bind(found.id,group.id,source.id,shop).run();
       return found.id; // A committed creation is never replayed or republished.
     }

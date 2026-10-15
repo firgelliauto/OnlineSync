@@ -32,7 +32,7 @@ function d1(sqlite) {
 async function setup(main = 10, child = 10, initialized = 1, extraStores = []) {
   const sqlite = new DatabaseSync(':memory:');
   for (const name of ['0001_initial.sql', '0002_token_lock.sql', '0003_sync_queue.sql',
-    '0004_preview_marker.sql', '0005_billing_cache.sql', '0006_developer_dashboard.sql', '0010_inventory_selection.sql', '0013_sku_plans.sql']) {
+    '0004_preview_marker.sql', '0005_billing_cache.sql', '0006_developer_dashboard.sql', '0010_inventory_selection.sql', '0013_sku_plans.sql','0016_inventory_direction.sql']) {
     sqlite.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), 'utf8'));
   }
   const db = d1(sqlite);
@@ -298,4 +298,9 @@ test('stock changing before a failed write retries blocks instead of overwriting
     assert.equal(state.quantities['child.myshopify.com'], 7);
     assert.equal(state.writes.length, 0);
   } finally { state.close(); }
+});
+
+test('one-way inventory copies the main quantity and never sends destination sales back to the main store',async()=>{
+ const state=await setup(10,10,1,['third.myshopify.com']);
+ try{state.sqlite.exec("UPDATE sync_groups SET inventory_mode='one_way' WHERE id='group'");state.quantities['child.myshopify.com']=8;state.quantities['third.myshopify.com']=7;await processLink(state.env,'link');assert.equal(state.quantities['main.myshopify.com'],10);assert.equal(state.quantities['child.myshopify.com'],10);assert.equal(state.quantities['third.myshopify.com'],10);assert.ok(state.writes.every(w=>w.shop!=='main.myshopify.com'));state.quantities['main.myshopify.com']=12;await processLink(state.env,'link');assert.equal(state.quantities['main.myshopify.com'],12);assert.equal(state.quantities['child.myshopify.com'],12);assert.equal(state.quantities['third.myshopify.com'],12)}finally{state.close()}
 });
