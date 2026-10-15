@@ -7,7 +7,7 @@ import { defaults } from '../src/inventory-settings.mjs';
 function harness() {
   let saved=defaults(),active=true,failNext=false;const calls=[],notes=[];
   const nodes=new Map();const $=id=>{if(!nodes.has(id))nodes.set(id,{textContent:'',replaceChildren(){},children:[]});return nodes.get(id)};
-  const context=vm.createContext({desiredInventoryMode:()=>'shared',$,current:{group:{role:'main'}},inventorySettingsLoaded:true,inventorySwitchBusy:false,inventoryAutoEnabled:true,inventorySectionState:{included:true,excluded:true,mappings:true,tags:true,collections:true},inventoryRules:{includedSkus:[],excludedSkus:[]},legacyInventoryRules:{},renderInventoryToggle(){},renderRuleSwitches(){},render(){},inventoryNote:note=>notes.push(note),message(){},api:async(path,method='GET',input)=>{
+  const context=vm.createContext({inventoryModeMatchesPage:()=>true,desiredInventoryMode:()=>'shared',$,current:{group:{role:'main'}},inventorySettingsLoaded:true,inventorySwitchBusy:false,inventoryAutoEnabled:true,inventorySectionState:{included:true,excluded:true,mappings:true,tags:true,collections:true},inventoryRules:{includedSkus:[],excludedSkus:[]},legacyInventoryRules:{},renderInventoryToggle(){},renderRuleSwitches(){},render(){},inventoryNote:note=>notes.push(note),message(){},api:async(path,method='GET',input)=>{
     calls.push([path,method]);
     if(path==='/api/status')return {group:{status:active?'active':'paused'}};
     if(path==='/api/control'){active=input.action==='start';return {}};

@@ -1,6 +1,7 @@
+import {saveSafetyNet,safetyNetStatus} from '../src/inventory-safety-net.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {defaults,selectedInventory,inventoryMatches,validateSettings,saveInventorySettings,setInventorySection,inventorySettings,withInventoryLock} from '../src/inventory-settings.mjs';
+import {switchInventoryMode,newInstallSettings,defaults,selectedInventory,inventoryMatches,validateSettings,saveInventorySettings,setInventorySection,inventorySettings,withInventoryLock} from '../src/inventory-settings.mjs';
 import {csvCell,exportActivity} from '../src/activity-export.mjs';
 import {applyInventoryMatches} from '../src/inventory-refresh.mjs';
 import {DatabaseSync} from 'node:sqlite';
@@ -123,3 +124,11 @@ test('autosave accepts active, busy groups without losing pending updates or oth
  }finally{sql.close()}
 });
 test('CSV export paginates a customer history, keeps deleted link SKUs and neutralizes spreadsheet formulas',async()=>{const {sql,db}=fixture();try{for(let i=0;i<1003;i++)sql.prepare("INSERT INTO sync_events(group_id,shop,event_type,detail,sku) VALUES('g','main','inventory_write',?,'SKU')").run('=formula '+i);sql.exec("INSERT INTO sync_events(group_id,event_type,detail) VALUES('o','inventory_write','secret'),('g','product_sync','product')");const first=await exportActivity(db,'g');assert.equal(first.rows.length,1000);assert.equal(first.next,1000);const second=await exportActivity(db,'g',first.next);assert.equal(second.rows.length,3);assert.equal(second.next,null);assert.equal(first.rows[0].sku,'SKU');assert.ok(first.rows.every(r=>r.detail.startsWith('=formula')));assert.equal((await exportActivity(db,'g',0,'products')).rows.length,1);assert.equal(csvCell('=cmd'),`"'=cmd"`);assert.equal(csvCell('a,"b"'),`"a,""b"""`)}finally{sql.close()}});
+
+test('mode profiles isolate rules and safety net while activation restores the chosen settings',async()=>{const f=fixture(),g={id:'g',main_shop:'main',role:'main'};try{
+ const shared={...defaults(),includedSkus:['SHARED'],includedTags:['shared-tag']};await saveInventorySettings(f.db,g,shared);await saveSafetyNet(f.db,g,{enabled:true});f.sql.exec("UPDATE sync_groups SET status='active' WHERE id='g'");
+ assert.deepEqual(await inventorySettings(f.db,'g','one_way'),newInstallSettings());await setInventorySection(f.db,g,{section:'automatic',enabled:true,inventoryMode:'one_way'});await saveInventorySettings(f.db,g,{...newInstallSettings(),mode:'all',includedSkus:['ONE-WAY'],inventoryMode:'one_way'});await saveSafetyNet(f.db,g,{enabled:false,inventoryMode:'one_way'});
+ assert.deepEqual(await inventorySettings(f.db,'g'),shared);assert.equal((await safetyNetStatus(f.db,'g')).enabled,true);assert.equal(f.sql.prepare("SELECT status FROM sync_groups WHERE id='g'").get().status,'active');
+ await switchInventoryMode(f.db,g,'one_way');assert.equal((await inventorySettings(f.db,'g')).mode,'all');assert.deepEqual((await inventorySettings(f.db,'g')).includedSkus,['ONE-WAY']);assert.equal((await safetyNetStatus(f.db,'g')).enabled,false);assert.equal(f.sql.prepare("SELECT status FROM sync_groups WHERE id='g'").get().status,'paused');
+ await setInventorySection(f.db,g,{section:'automatic',enabled:false,inventoryMode:'one_way'});await switchInventoryMode(f.db,g,'shared');assert.deepEqual(await inventorySettings(f.db,'g'),shared);assert.equal((await safetyNetStatus(f.db,'g')).enabled,true);assert.equal((await inventorySettings(f.db,'g','one_way')).mode,'selected');
+ }finally{f.sql.close()}});

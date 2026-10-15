@@ -1,13 +1,17 @@
+import {inventorySettings,withInventoryLock} from './inventory-settings.mjs';
 import { enqueueLinks } from './inventory.mjs';
 
 const fail = (message, status=409) => { throw Object.assign(new Error(message), {status}); };
-export async function safetyNetStatus(db, groupId) {
+export async function safetyNetStatus(db, groupId, inventoryMode) {
+  if(inventoryMode){const active=await db.prepare("SELECT inventory_mode FROM sync_groups WHERE id=?").bind(groupId).first();if(!["shared","one_way"].includes(inventoryMode))fail("Choose an inventory mode",400);if(active.inventory_mode!==inventoryMode){const row=await db.prepare("SELECT * FROM inventory_mode_settings WHERE group_id=? AND inventory_mode=?").bind(groupId,inventoryMode).first();return {enabled:Boolean(row?.safety_enabled),lastRequestedAt:row?.last_requested_at||null,lastSource:row?.last_source||null}}}
   const row=await db.prepare('SELECT * FROM inventory_safety_net WHERE group_id=?').bind(groupId).first();
   return {enabled:Boolean(row?.enabled),lastRequestedAt:row?.last_requested_at||null,lastSource:row?.last_source||null};
 }
-export async function saveSafetyNet(db, group, input) {
+export async function saveSafetyNet(db,group,input){return withInventoryLock(db,group,()=>persistSafetyNet(db,group,input),true,{active:true,busy:true})}
+async function persistSafetyNet(db, group, input) {
   if(group.role!=='main')fail('Open the main store to configure the safety net',403);
   if(typeof input?.enabled!=='boolean')fail('Choose On or Off',400);
+  if(input.inventoryMode){const active=await db.prepare('SELECT inventory_mode FROM sync_groups WHERE id=?').bind(group.id).first();const settings=await inventorySettings(db,group.id,input.inventoryMode);await db.prepare('INSERT INTO inventory_mode_settings(group_id,inventory_mode,settings,safety_enabled) VALUES(?,?,?,?) ON CONFLICT(group_id,inventory_mode) DO UPDATE SET safety_enabled=excluded.safety_enabled').bind(group.id,input.inventoryMode,JSON.stringify(settings),input.enabled?1:0).run();if(active.inventory_mode!==input.inventoryMode)return safetyNetStatus(db,group.id,input.inventoryMode)}
   await db.prepare(`INSERT INTO inventory_safety_net(group_id,enabled) VALUES (?,?)
     ON CONFLICT(group_id) DO UPDATE SET enabled=excluded.enabled`).bind(group.id,input.enabled?1:0).run();
   return safetyNetStatus(db,group.id);

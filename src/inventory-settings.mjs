@@ -13,7 +13,8 @@ export function effectiveInventorySettings(settings) {
   if (!active.mappingsEnabled) active.mappings=[];
   return active;
 }
-export async function inventorySettings(db, groupId) {
+export async function inventorySettings(db, groupId, inventoryMode) {
+  if(inventoryMode){if(!["shared","one_way"].includes(inventoryMode))fail("Choose an inventory mode",400);const group=await db.prepare("SELECT inventory_mode FROM sync_groups WHERE id=?").bind(groupId).first();if(group.inventory_mode!==inventoryMode){const profile=await db.prepare("SELECT settings FROM inventory_mode_settings WHERE group_id=? AND inventory_mode=?").bind(groupId,inventoryMode).first();return profile?{...newInstallSettings(),...JSON.parse(profile.settings)}:newInstallSettings()}}
   const row = await db.prepare('SELECT settings FROM inventory_settings WHERE group_id=?').bind(groupId).first();
   if(!row)return defaults();const saved=JSON.parse(row.settings);return {...defaults(),...saved,tagsEnabled:saved.tagsEnabled??saved.includesEnabled!==false,collectionsEnabled:saved.collectionsEnabled??saved.includesEnabled!==false};
 }
@@ -145,12 +146,14 @@ export async function saveInventorySettings(db, group, input) {
   const members=(await db.prepare('SELECT shop,role FROM group_stores WHERE group_id=?').bind(group.id).all()).results;
   const settings=validateSettings(input,members.map(m=>m.shop),group.main_shop);
   return withInventoryLock(db,group,async()=>{
-    await persistInventorySettings(db,group,settings);
+    await persistInventorySettings(db,group,settings,input.inventoryMode);
     return settings;
   },true,{active:true,busy:true});
 }
 
-async function persistInventorySettings(db,group,settings) {
+async function persistInventorySettings(db,group,settings,inventoryMode) {
+  const active=(await db.prepare("SELECT inventory_mode FROM sync_groups WHERE id=?").bind(group.id).first()).inventory_mode;const mode=inventoryMode||active;if(!["shared","one_way"].includes(mode))fail("Choose an inventory mode",400);
+  await db.prepare("INSERT INTO inventory_mode_settings(group_id,inventory_mode,settings) VALUES(?,?,?) ON CONFLICT(group_id,inventory_mode) DO UPDATE SET settings=excluded.settings").bind(group.id,mode,JSON.stringify(settings)).run();if(mode!==active)return;
   await db.batch([
       db.prepare(`INSERT INTO inventory_settings(group_id,settings) VALUES (?,?) ON CONFLICT(group_id) DO UPDATE SET settings=excluded.settings,updated_at=CURRENT_TIMESTAMP`).bind(group.id,JSON.stringify(settings)),
       db.prepare(`UPDATE sync_events SET sku=(SELECT l.sku FROM inventory_links l WHERE l.id=sync_events.link_id) WHERE group_id=? AND sku IS NULL AND link_id IS NOT NULL`).bind(group.id),
@@ -165,11 +168,11 @@ export async function setInventorySection(db,group,input) {
   if(!input||!Object.hasOwn(fields,input.section)||typeof input.enabled!=='boolean')fail('Choose a section and On or Off',400);
   return withInventoryLock(db,group,async()=>{
     // Read under the configuration lock; switches never consume unsaved form edits.
-    const saved=await inventorySettings(db,group.id);
+    const saved=await inventorySettings(db,group.id,input.inventoryMode);
     const field=fields[input.section],value=input.section==='automatic'?(input.enabled?'all':'selected'):input.enabled;
     if(saved[field]===value)return saved;
     const settings={...saved,[field]:value};
-    await persistInventorySettings(db,group,settings);
+    await persistInventorySettings(db,group,settings,input.inventoryMode);
     return settings;
   },true,{active:true,busy:true});
 }
@@ -184,4 +187,17 @@ export async function withInventoryLock(db,group,action,allowPending=false,optio
   try { return await action();
 
   } finally {await db.prepare('UPDATE sync_groups SET inventory_config_lock=NULL,inventory_config_lock_until=0 WHERE id=? AND inventory_config_lock=?').bind(group.id,owner).run()}
+}
+
+export async function switchInventoryMode(db,group,mode){
+ if(!['shared','one_way'].includes(mode))fail('Choose an inventory mode',400);
+ return withInventoryLock(db,group,async()=>{const active=(await db.prepare('SELECT inventory_mode FROM sync_groups WHERE id=?').bind(group.id).first()).inventory_mode;if(active===mode)return;
+ const settings=await inventorySettings(db,group.id),safety=await db.prepare('SELECT * FROM inventory_safety_net WHERE group_id=?').bind(group.id).first();const target=await inventorySettings(db,group.id,mode),targetSafety=await db.prepare('SELECT * FROM inventory_mode_settings WHERE group_id=? AND inventory_mode=?').bind(group.id,mode).first();
+ await db.batch([
+ db.prepare('INSERT INTO inventory_mode_settings(group_id,inventory_mode,settings,safety_enabled,last_requested_at,last_source) VALUES(?,?,?,?,?,?) ON CONFLICT(group_id,inventory_mode) DO UPDATE SET settings=excluded.settings,safety_enabled=excluded.safety_enabled,last_requested_at=excluded.last_requested_at,last_source=excluded.last_source').bind(group.id,active,JSON.stringify(settings),safety?.enabled||0,safety?.last_requested_at??null,safety?.last_source??null),
+ db.prepare("UPDATE sync_groups SET inventory_mode=?,status='paused',preview_completed_at=NULL WHERE id=?").bind(mode,group.id),
+ db.prepare('INSERT INTO inventory_settings(group_id,settings) VALUES(?,?) ON CONFLICT(group_id) DO UPDATE SET settings=excluded.settings').bind(group.id,JSON.stringify(target)),
+ db.prepare('INSERT INTO inventory_safety_net(group_id,enabled,last_requested_at,last_source) VALUES(?,?,?,?) ON CONFLICT(group_id) DO UPDATE SET enabled=excluded.enabled,last_requested_at=excluded.last_requested_at,last_source=excluded.last_source').bind(group.id,targetSafety?.safety_enabled||0,targetSafety?.last_requested_at??0,targetSafety?.last_source??null),
+ db.prepare("INSERT INTO sync_events(group_id,shop,event_type,detail) VALUES(?,?,'inventory_mode',?)").bind(group.id,group.main_shop,'Inventory mode changed to '+mode+'. Its independent rules were loaded; synchronization paused.')]);
+ },false,{active:true});
 }

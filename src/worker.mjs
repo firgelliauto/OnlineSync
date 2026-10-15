@@ -9,7 +9,7 @@ import { createPairingCode, redeemPairingCode, MAX_GROUP_STORES } from './pairin
 import { appPage } from './app-page.mjs';
 import { customerActivity } from './customer-activity.mjs';
 import { saveStoreName, storeName } from './store-names.mjs';
-import { inventorySettings, newInstallSettings, saveInventorySettings, setInventorySection, catalogOptions, inventoryMatches, withInventoryLock, populateCollections } from './inventory-settings.mjs';
+import { inventorySettings, switchInventoryMode, newInstallSettings, saveInventorySettings, setInventorySection, catalogOptions, inventoryMatches, withInventoryLock, populateCollections } from './inventory-settings.mjs';
 import { exportActivity } from './activity-export.mjs';
 import { publicPage } from './public-pages.mjs';
 import { activeSubscription, refreshSubscriptionSnapshots } from './billing.mjs';
@@ -256,6 +256,7 @@ async function merchantApi(request, env, path) {
     if(path==='/api/inventory-restore/run'&&request.method==='POST')return json(await runRestoreBatch(db,group,(await request.json()).id,env));
     if(path==='/api/inventory-restore/cancel'&&request.method==='POST')return json(await cancelRestore(db,group,(await request.json()).id));
     if(path==='/api/inventory-restore/status'&&request.method==='GET')return json(await restoreStatus(db,group,new URL(request.url).searchParams.get('id')));
+    if(path==='/api/inventory-safety-net'&&request.method==='GET')return json(await safetyNetStatus(db,group.id,new URL(request.url).searchParams.get('mode')));
     if (path === '/api/inventory-safety-net' && request.method === 'POST') return json(await saveSafetyNet(db,group,await request.json()));
     if (path === '/api/inventory-safety-net/run' && request.method === 'POST') {
       if(group.role!=='main')return json({error:'Open the main store to check inventory'},403);
@@ -270,12 +271,12 @@ async function merchantApi(request, env, path) {
       const main=await db.prepare('SELECT is_development FROM stores WHERE shop=?').bind(group.main_shop).first();
       return json({billing,isDevelopment:main?.is_development===1,skuUsage:await syncedSkuCount(db,group.id),skuPlan:subscriptionPlan(billing)});
     }
-    if (path === '/api/inventory-settings' && request.method === 'GET') return json(await inventorySettings(db,group.id));
+    if (path === '/api/inventory-settings' && request.method === 'GET') return json(await inventorySettings(db,group.id,new URL(request.url).searchParams.get("mode")));
     if (path === '/api/inventory-settings' && request.method === 'POST') {const saved=await saveInventorySettings(db,group,await request.json());await env.SYNC_QUEUE.send({inventoryRulesGroupId:group.id});return json(saved)}
     if(path==='/api/inventory-mode'&&request.method==='POST'){
       if(group.role!=='main')return json({error:'Open the main store to change the inventory mode'},403);
       const {mode}=await request.json();if(!['shared','one_way'].includes(mode))return json({error:'Choose shared stock or one-way inventory'},400);
-      await withInventoryLock(db,group,async()=>{await db.batch([db.prepare("UPDATE sync_groups SET inventory_mode=?,status='paused' WHERE id=?").bind(mode,group.id),db.prepare("INSERT INTO sync_events(group_id,shop,event_type,detail) VALUES(?,?,'inventory_mode',?)").bind(group.id,group.main_shop,'Inventory mode changed to '+mode+'. Synchronization paused; turn an applicable section On to resume.')])},false,{active:true});
+      await switchInventoryMode(db,group,mode);
       return json(await status(db,user.shop,env));
     }
     if(path==='/api/product-options'&&request.method==='POST'){
