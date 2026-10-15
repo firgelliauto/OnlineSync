@@ -1,0 +1,18 @@
+import {inventorySettings,withInventoryLock} from './inventory-settings.mjs';
+export const INVENTORY_FEATURES={automatic:['Automatic SKU matching','Match products with identical SKUs across stores.'],special:['Special SKU rules','Include or exclude specific SKUs; exclusions override matching.'],mappings:['Manual SKU mapping','Connect products whose SKUs differ between stores.'],collections:['Collection rules','Select main-store collections and match their products by SKU.'],tags:['Tag rules','Include or exclude tagged products while matching by SKU.']};
+const flags={special:['includesEnabled','excludesEnabled'],mappings:['mappingsEnabled'],collections:['collectionsEnabled'],tags:['tagsEnabled']};
+function enabled(settings,key){return key==='automatic'?settings.mode==='all':flags[key].some(flag=>settings[flag])}
+async function modes(db,id){return {shared:await inventorySettings(db,id,'shared'),one_way:await inventorySettings(db,id,'one_way')}}
+export async function inventoryWorkspace(db,id){const row=await db.prepare('SELECT features FROM inventory_workspaces WHERE group_id=?').bind(id).first(),settings=await modes(db,id);const active=Object.keys(INVENTORY_FEATURES).filter(key=>Object.values(settings).some(s=>enabled(s,key)));return {configured:Boolean(row),features:[...new Set([...(row?JSON.parse(row.features):['automatic']),...active])],enabled:active}}
+export async function saveInventoryWorkspace(db,group,input){
+ if(group.role!=='main')throw Object.assign(new Error('Open the main store to customize inventory'),{status:403});
+ if(!Array.isArray(input.features)||input.features.length>5||input.features.some(key=>!Object.hasOwn(INVENTORY_FEATURES,key)))throw Object.assign(new Error('Choose supported inventory features'),{status:400});
+ return withInventoryLock(db,group,async()=>{const settings=await modes(db,group.id),hidden=Object.keys(INVENTORY_FEATURES).filter(key=>!input.features.includes(key)),disabled=hidden.filter(key=>Object.values(settings).some(s=>enabled(s,key)));
+ if(disabled.length&&input.disableRemoved!==true)throw Object.assign(new Error('Confirm turning Off the active features you are removing'),{status:409});
+ const active=(await db.prepare('SELECT inventory_mode FROM sync_groups WHERE id=?').bind(group.id).first()).inventory_mode;const statements=[];
+ for(const [mode,saved] of Object.entries(settings)){for(const key of hidden){if(key==='automatic')saved.mode='selected';else for(const flag of flags[key])saved[flag]=false}statements.push(db.prepare('INSERT INTO inventory_mode_settings(group_id,inventory_mode,settings) VALUES(?,?,?) ON CONFLICT(group_id,inventory_mode) DO UPDATE SET settings=excluded.settings').bind(group.id,mode,JSON.stringify(saved)));if(mode===active&&disabled.length)statements.push(db.prepare('INSERT INTO inventory_settings(group_id,settings) VALUES(?,?) ON CONFLICT(group_id) DO UPDATE SET settings=excluded.settings').bind(group.id,JSON.stringify(saved)))}
+ statements.push(db.prepare('INSERT INTO inventory_workspaces(group_id,features) VALUES(?,?) ON CONFLICT(group_id) DO UPDATE SET features=excluded.features,updated_at=CURRENT_TIMESTAMP').bind(group.id,JSON.stringify([...new Set(input.features)])));
+ if(disabled.length){statements.push(db.prepare('UPDATE sync_groups SET preview_completed_at=NULL WHERE id=?').bind(group.id));statements.push(db.prepare("INSERT INTO sync_events(group_id,shop,event_type,detail) VALUES(?,?,'inventory_settings','Removed inventory workspace features were turned Off in both modes. Saved rule entries were retained.')").bind(group.id,group.main_shop))}
+ await db.batch(statements);return inventoryWorkspace(db,group.id);
+ },true,{active:true,busy:true});
+}

@@ -1,0 +1,5 @@
+CREATE TABLE inventory_workspaces (
+ group_id TEXT PRIMARY KEY REFERENCES sync_groups(id) ON DELETE CASCADE,
+ features TEXT NOT NULL,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

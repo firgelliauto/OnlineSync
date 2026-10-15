@@ -1,3 +1,4 @@
+import {inventoryWorkspace,saveInventoryWorkspace} from './inventory-workspace.mjs';
 import {productBackupPage,prepareProductRestore,reviewProductRestore,runProductRestore,productRestoreStatus,cancelProductRestore} from './product-backup.mjs';
 import { downloadBackup, previewRestore, runRestoreBatch, restoreStatus, cancelRestore } from './inventory-backup.mjs';
 import { reserveSyncedSkus, syncedSkuCount, subscriptionPlan } from './sku-plans.mjs';
@@ -87,7 +88,7 @@ async function status(db, shop, env) {
   return { currentShop: shop, group: { id: group.id, mainShop: group.main_shop, role: group.role,
       status: group.status, inventoryMode:group.inventory_mode, previewCompleted: Boolean(group.preview_completed_at), restoreId:group.inventory_restore_id, billing },
     stores: members.results, links: Number(counts.links), blocked: Number(counts.blocked ?? 0),
-    maxStores: MAX_GROUP_STORES, safetyNet: await safetyNetStatus(db,group.id),
+    inventoryWorkspace:await inventoryWorkspace(db,group.id),maxStores: MAX_GROUP_STORES, safetyNet: await safetyNetStatus(db,group.id),
     productSetup: {fieldsSelected:productConfiguration.fields.length>0,enabled:productConfiguration.enabled,hasCopied:Boolean(productCopy)},
     canPair: group.role === 'main' && members.results.length < MAX_GROUP_STORES && group.status !== 'active' && Number(counts.established ?? 0) === 0,
     canPreview: group.role === 'main' && group.status !== 'active' && Number(counts.established ?? 0) === 0 &&
@@ -271,6 +272,7 @@ async function merchantApi(request, env, path) {
       const main=await db.prepare('SELECT is_development FROM stores WHERE shop=?').bind(group.main_shop).first();
       return json({billing,isDevelopment:main?.is_development===1,skuUsage:await syncedSkuCount(db,group.id),skuPlan:subscriptionPlan(billing)});
     }
+    if(path==='/api/inventory-workspace'&&request.method==='POST'){const value=await saveInventoryWorkspace(db,group,await request.json());await env.SYNC_QUEUE.send({inventoryRulesGroupId:group.id});return json(value)}
     if (path === '/api/inventory-settings' && request.method === 'GET') return json(await inventorySettings(db,group.id,new URL(request.url).searchParams.get("mode")));
     if (path === '/api/inventory-settings' && request.method === 'POST') {const saved=await saveInventorySettings(db,group,await request.json());await env.SYNC_QUEUE.send({inventoryRulesGroupId:group.id});return json(saved)}
     if(path==='/api/inventory-mode'&&request.method==='POST'){

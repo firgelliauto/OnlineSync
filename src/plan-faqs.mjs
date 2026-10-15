@@ -1,4 +1,9 @@
 export const planFAQs=[
+ ['Inventory workspace',[
+ ['How do I choose which inventory features I see?','Use the first-launch inventory chooser, or Customize inventory on Home or either inventory subpage. Choose automatic SKU matching, Special SKU rules, manual mappings, collections or tags. Your main store manages these choices for the group. Product Synchronization always remains fully available.'],
+ ['Does selecting a feature turn synchronization On?','No. Selection only makes the section visible. Its existing On/Off settings remain separate for Shared Stock and One-way Inventory. New installations start with synchronization Off.'],
+ ['What happens if I remove an active inventory feature?','Confirm turning it Off in both inventory modes before it is hidden. Saved SKU entries, mappings, collections and tags are retained. Adding the feature again shows those rules but leaves it Off until deliberately enabled. Activity, safety net, backups and exports remain under Inventory tools & history.']
+ ]],
  ['Plans and billing',[
  ['What plans are available?','Basic supports up to 100 synchronized SKUs at $14.99 USD/month or $143.90 USD/year. Plus supports 101+ synchronized SKUs at $24.99 USD/month or $239.90 USD/year. One subscription covers a group of 2–6 Shopify stores.'],
  ['How much do I save with annual billing?','Annual billing saves 20%, rounded to cents: Basic costs $143.90 USD/year and Plus costs $239.90 USD/year. Annual subscriptions are billed upfront.'],

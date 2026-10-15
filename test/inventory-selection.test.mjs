@@ -1,3 +1,4 @@
+import {inventoryWorkspace,saveInventoryWorkspace} from '../src/inventory-workspace.mjs';
 import {encrypt} from '../src/security.mjs';
 import {saveSafetyNet,safetyNetStatus} from '../src/inventory-safety-net.mjs';
 import test from 'node:test';
@@ -144,3 +145,10 @@ test('live tag exclusion added to a destination blocks an already matched SKU be
 });
 
 test('Special SKU rules has one switch that changes both lists without changing automatic matching or entries',async()=>{const f=fixture(),g={id:'g',main_shop:'main',role:'main'};try{await saveInventorySettings(f.db,g,{...defaults(),mode:'all',includedSkus:['A'],excludedSkus:['B']});const off=await setInventorySection(f.db,g,{section:'special',enabled:false,inventoryMode:'shared'});assert.equal(off.includesEnabled,false);assert.equal(off.excludesEnabled,false);assert.equal(off.mode,'all');assert.deepEqual(off.includedSkus,['A']);assert.deepEqual(off.excludedSkus,['B']);const on=await setInventorySection(f.db,g,{section:'special',enabled:true,inventoryMode:'shared'});assert.equal(on.includesEnabled,true);assert.equal(on.excludesEnabled,true);assert.equal(on.mode,'all');assert.equal((await inventorySettings(f.db,'g','one_way')).includesEnabled,false);}finally{f.sql.close()}});
+
+test('workspace feature choices never enable synchronization; removing active rules requires confirmation and retains entries in both modes',async()=>{const f=fixture(),g={id:'g',main_shop:'main',role:'main'};try{
+ await saveInventorySettings(f.db,g,newInstallSettings());assert.equal((await inventoryWorkspace(f.db,'g')).configured,false);await saveInventoryWorkspace(f.db,g,{features:['automatic','tags']});assert.equal((await inventorySettings(f.db,'g')).mode,'selected');assert.equal((await inventorySettings(f.db,'g')).tagsEnabled,false);
+ await saveInventorySettings(f.db,g,{...newInstallSettings(),tagsEnabled:true,includedTags:['keep-me']});await saveInventorySettings(f.db,g,{...newInstallSettings(),tagsEnabled:true,excludedTags:['hold'],inventoryMode:'one_way'});
+ await assert.rejects(saveInventoryWorkspace(f.db,g,{features:['automatic']}),/Confirm/);assert.equal((await inventorySettings(f.db,'g')).tagsEnabled,true);await saveInventoryWorkspace(f.db,g,{features:['automatic'],disableRemoved:true});for(const mode of ['shared','one_way'])assert.equal((await inventorySettings(f.db,'g',mode)).tagsEnabled,false);assert.deepEqual((await inventorySettings(f.db,'g','shared')).includedTags,['keep-me']);assert.deepEqual((await inventorySettings(f.db,'g','one_way')).excludedTags,['hold']);assert.deepEqual((await inventoryWorkspace(f.db,'g')).features,['automatic']);
+ await saveInventoryWorkspace(f.db,g,{features:['automatic','tags']});assert.equal((await inventorySettings(f.db,'g')).tagsEnabled,false);assert.deepEqual((await inventorySettings(f.db,'g')).includedTags,['keep-me']);assert.equal((await inventoryWorkspace(f.db,'o')).configured,false);await assert.rejects(saveInventoryWorkspace(f.db,{...g,role:'child'},{features:[]}),/main store/);await assert.rejects(saveInventoryWorkspace(f.db,g,{features:['made-up']}),/supported/);
+ }finally{f.sql.close()}});
