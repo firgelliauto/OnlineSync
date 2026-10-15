@@ -1,7 +1,8 @@
+import {encrypt} from '../src/security.mjs';
 import {saveSafetyNet,safetyNetStatus} from '../src/inventory-safety-net.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {switchInventoryMode,newInstallSettings,defaults,selectedInventory,inventoryMatches,validateSettings,saveInventorySettings,setInventorySection,inventorySettings,withInventoryLock} from '../src/inventory-settings.mjs';
+import {checkLiveSelection,switchInventoryMode,newInstallSettings,defaults,selectedInventory,inventoryMatches,validateSettings,saveInventorySettings,setInventorySection,inventorySettings,withInventoryLock} from '../src/inventory-settings.mjs';
 import {csvCell,exportActivity} from '../src/activity-export.mjs';
 import {applyInventoryMatches} from '../src/inventory-refresh.mjs';
 import {DatabaseSync} from 'node:sqlite';
@@ -132,3 +133,12 @@ test('mode profiles isolate rules and safety net while activation restores the c
  await switchInventoryMode(f.db,g,'one_way');assert.equal((await inventorySettings(f.db,'g')).mode,'all');assert.deepEqual((await inventorySettings(f.db,'g')).includedSkus,['ONE-WAY']);assert.equal((await safetyNetStatus(f.db,'g')).enabled,false);assert.equal(f.sql.prepare("SELECT status FROM sync_groups WHERE id='g'").get().status,'paused');
  await setInventorySection(f.db,g,{section:'automatic',enabled:false,inventoryMode:'one_way'});await switchInventoryMode(f.db,g,'shared');assert.deepEqual(await inventorySettings(f.db,'g'),shared);assert.equal((await safetyNetStatus(f.db,'g')).enabled,true);assert.equal((await inventorySettings(f.db,'g','one_way')).mode,'selected');
  }finally{f.sql.close()}});
+
+test('tag includes select beyond automatic matching and exclusions in any store override every selector',()=>{
+ const catalog=tags=>new Map([['A',{sku:'A',itemId:'A',tags,collections:[]}]]);const source=catalog(['ready']),target=catalog(['READY']);const rules={...defaults(),mode:'selected',includedTags:['ready']};assert.equal(inventoryMatches(source,[target],['child'],rules,'main').length,1);
+ const excluded={...rules,mode:'all',excludesEnabled:false,excludedTags:['hold']};assert.equal(inventoryMatches(source,[catalog(['ready','HOLD'])],['child'],excluded,'main').length,0);assert.equal(inventoryMatches(catalog(['ready','hold']),[target],['child'],excluded,'main').length,0);assert.equal(inventoryMatches(source,[catalog(['hold'])],['child'],{...excluded,tagsEnabled:false},'main').length,1);
+ assert.equal(inventoryMatches(source,[target],['child'],{...rules,excludedTags:['ready']},'main').length,0);
+});
+test('live tag exclusion added to a destination blocks an already matched SKU before inventory writes',async()=>{
+ const f=fixture(),oldFetch=globalThis.fetch,key=Buffer.alloc(32,19).toString('base64');try{const cipher=await encrypt('token',key);f.sql.prepare('UPDATE stores SET access_token_cipher=?,token_expires_at=?').run(cipher,Math.floor(Date.now()/1000)+3600);const g={id:'g',main_shop:'main',role:'main'};await saveInventorySettings(f.db,g,{...defaults(),mode:'all',excludedTags:['hold'],excludesEnabled:false});globalThis.fetch=async(url,options)=>{const {query}=JSON.parse(options.body);return Response.json({data:{inventoryItem:{variants:{nodes:[{product:{id:'p',tags:query.includes('InventoryTagSelection')?['HOLD']:[]}}]}}}})};await assert.rejects(checkLiveSelection(f.db,{group_id:'g',sku:'A'},{shop:'main',inventory_item_id:'i1'},{TOKEN_ENCRYPTION_KEY:key},[{shop:'child',inventory_item_id:'i2'}]),/excluded inventory tag/);}finally{globalThis.fetch=oldFetch;f.sql.close()}
+});

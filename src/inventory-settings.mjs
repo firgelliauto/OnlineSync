@@ -7,9 +7,9 @@ export const newInstallSettings=()=>({...defaults(),mode:'selected',includesEnab
 export function effectiveInventorySettings(settings) {
   const active = { ...defaults(), ...settings };
   if (!active.includesEnabled) active.includedSkus=[];
-  if(!active.tagsEnabled)active.includedTags=[];
+  if(!active.tagsEnabled){active.includedTags=[];active.excludedTags=[];}
   if(!active.collectionsEnabled)active.includedCollections=[];
-  if (!active.excludesEnabled) for (const field of ['Skus','Tags','Collections']) active['excluded'+field]=[];
+  if (!active.excludesEnabled) for (const field of ['Skus','Collections']) active['excluded'+field]=[];
   if (!active.mappingsEnabled) active.mappings=[];
   return active;
 }
@@ -73,7 +73,7 @@ export function inventoryMatches(source, targets, shops, settings, mainShop = '_
     }
   }
   for(const canonical of assignments.keys())if(selected.has(canonical)&&!matches.some(row=>row.sku===canonical))fail('A mapped product is missing in another connected store. Add a mapping for that store before previewing.');
-  return matches.filter(row=>sharedInventoryTag(row.source,row.children,settings.includedTags));
+  return matches.filter(row=>!settings.excludedTags.some(t=>[row.source,...row.children].some(v=>(v.tags||[]).some(tag=>tag.toLowerCase()===t.toLowerCase())))).filter(row=>sharedInventoryTag(row.source,row.children,settings.includedTags));
 }
 export function validateSettings(input, shops, mainShop = '__main__') {
   if (!input || !['all','selected'].includes(input.mode)) fail('Choose all products or selected products',400);
@@ -139,7 +139,7 @@ export async function checkLiveSelection(db,link,mainMember,env,members=[]) {
   if(!products.length || products.some(product=>!selectedInventory({sku:link.sku,tags:product.tags,collections:ids.filter((id,index)=>product['c'+index]).map(id=>({id}))},settings,!!link.manually_mapped))) {
     throw Object.assign(new Error('Main-store product no longer matches the inventory selection. Review exclusions before resuming this SKU.'),{fatal:true});
   }
-  if(settings.includedTags.some(t=>(products[0].tags||[]).some(tag=>tag.toLowerCase()===t.toLowerCase()))){const targets=[];for(const member of members.filter(m=>m.shop!==mainMember.shop)){const data=await adminGraphql(db,member.shop,env,`query InventoryTagSelection($id:ID!){inventoryItem(id:$id){variants(first:2){nodes{product{tags}}}}}`,{id:member.inventory_item_id});const product=data.inventoryItem?.variants?.nodes?.[0]?.product;if(!product)throw Object.assign(new Error('Tagged inventory product is unavailable in a connected store'),{fatal:true});targets.push(product)}if(!sharedInventoryTag(products[0],targets,settings.includedTags))throw Object.assign(new Error('The configured inventory tag must be present on the matching product in every store.'),{fatal:true})}
+  if(settings.excludedTags.length||settings.includedTags.some(t=>(products[0].tags||[]).some(tag=>tag.toLowerCase()===t.toLowerCase()))){const targets=[];for(const member of members.filter(m=>m.shop!==mainMember.shop)){const data=await adminGraphql(db,member.shop,env,`query InventoryTagSelection($id:ID!){inventoryItem(id:$id){variants(first:2){nodes{product{tags}}}}}`,{id:member.inventory_item_id});const product=data.inventoryItem?.variants?.nodes?.[0]?.product;if(!product)throw Object.assign(new Error('Tagged inventory product is unavailable in a connected store'),{fatal:true});targets.push(product)}if(settings.excludedTags.some(t=>[products[0],...targets].some(p=>(p.tags||[]).some(tag=>tag.toLowerCase()===t.toLowerCase()))))throw Object.assign(new Error('An excluded inventory tag is present in a connected store; this SKU will not synchronize.'),{fatal:true});if(!sharedInventoryTag(products[0],targets,settings.includedTags))throw Object.assign(new Error('The configured inventory tag must be present on the matching product in every store.'),{fatal:true})}
 }
 export async function saveInventorySettings(db, group, input) {
   if(group.role!=='main') fail('Open the main store to change inventory selections',403);
