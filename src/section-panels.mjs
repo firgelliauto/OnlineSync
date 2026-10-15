@@ -17,7 +17,7 @@ export function sectionPanelsScript(){return `
 function initializeSectionPanels(){
  const panels=new Set([...document.querySelectorAll('[data-page-view="inventory"] .panel,[data-page-view="products"] .panel'),...['activityPanel','activityExportPanel','safetyNetPanel','backupPanel'].map(id=>$(id))]);
  for(const panel of panels){
-  if(!panel||panel.querySelector(':scope > .section-details'))continue;
+  if(!panel||panel.id==='inventoryModePanel'||panel.querySelector(':scope > .section-details'))continue;
   const heading=panel.querySelector('h2');if(!heading)continue;
   const details=document.createElement('details'),summary=document.createElement('summary'),body=document.createElement('div');details.className='section-details';body.className='section-body';details.open=true;
   const key='onlinesync:section:'+new URLSearchParams(location.search).get('shop')+':'+panel.id;

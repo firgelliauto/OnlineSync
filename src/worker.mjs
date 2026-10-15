@@ -494,7 +494,7 @@ export default {
     }
     if (url.pathname === '/health') return json({ status: 'ok',
       inventoryWritesEnabled: env.INVENTORY_WRITES_ENABLED === 'true' });
-    if (['/', '/inventory', '/inventory/one-way', '/products', '/plan'].includes(url.pathname) && request.method === 'GET') {
+    if (['/', '/inventory', '/inventory/shared-stock', '/inventory/one-way', '/products', '/plan'].includes(url.pathname) && request.method === 'GET') {
       if (!env.SHOPIFY_CLIENT_ID) return new Response('Set SHOPIFY_CLIENT_ID', { status: 503 });
       return new Response(appPage(env.SHOPIFY_CLIENT_ID), { headers: {
         'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
