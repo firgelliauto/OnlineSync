@@ -1,7 +1,7 @@
 export function issueCode(error) {
   const message = String(error?.message ?? '');
   if (/429|throttl/i.test(message)) return 'RATE_LIMIT';
-  if (/401|403|token|renew access|not connected/i.test(message)) return 'STORE_ACCESS';
+  if ([401,403].includes(error?.status)||/401|403|token|renew access|not connected|approve .* access/i.test(message)) return 'STORE_ACCESS';
   return 'REQUEST_FAILED';
 }
 
