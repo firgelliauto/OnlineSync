@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { encrypt } from '../src/security.mjs';
 import {adjustedPrice} from '../src/price-rules.mjs';
 import {createDraft} from '../src/product-drafts.mjs';
-import { draftPlan,productPlan,selectedFields,saveProductSettings,setProductAutomatic,saveProductInclusion,productSettings,previewProduct,applyProductPreview,queueProduct,queueProductCatalog,processProductJob,productAccessStatus } from '../src/product-sync.mjs';
+import { draftPlan,productPlan,selectedFields,saveProductSettings,setProductAutomatic,saveProductInclusion,productSettings,previewProduct,applyProductPreview,queueProduct,queueProductCatalog,processProductJob } from '../src/product-sync.mjs';
 
 function adapter(sqlite){return {prepare(sql){const make=values=>({run:async()=>({meta:{changes:Number(sqlite.prepare(sql).run(...values).changes)}}),first:async()=>sqlite.prepare(sql).get(...values)??null,all:async()=>({results:sqlite.prepare(sql).all(...values)})});return {...make([]),bind:(...values)=>make(values)}},async batch(statements){sqlite.exec('BEGIN');try{const result=[];for(const s of statements)result.push(await s.run());sqlite.exec('COMMIT');return result}catch(e){sqlite.exec('ROLLBACK');throw e}}}}
 function product(id,title='Main title'){return {id,title,handle:'keep-this-url',descriptionHtml:'<p>Main description</p>',vendor:'Vendor',productType:'Type',tags:['b','a'],seo:{title:'SEO',description:'Search text'},currency:'USD',
@@ -35,7 +35,7 @@ async function fixture(count=2){
     if(query.includes('query SyncProduct'))return Response.json({data:{shop:{currencyCode:p.currency},product:{...p,variants:{nodes:p.variants,pageInfo:{hasNextPage:false}},media:{nodes:p.media,pageInfo:{hasNextPage:false}}}}});
     if(query.includes('query ProductInclusion'))return Response.json({data:{product:{c0:Boolean(failure.collectionMember)}}});
     if(query.includes('query ProductScan'))return Response.json({data:{products:{nodes:[{id:p.id}],pageInfo:{hasNextPage:false}}}});
-    if(query.includes('query ProductScopes'))return Response.json({data:{currentAppInstallation:{accessScopes:(failure.scopes?.get(shop)??['write_products','read_files']).map(handle=>({handle}))}}});
+    if(query.includes('query ProductScopes'))return Response.json({data:{currentAppInstallation:{accessScopes:[{handle:'write_products'},{handle:'read_files'}]}}});
     if(query.includes('query ExistingSyncImage'))return Response.json({data:{files:{nodes:[]}}});
     if(query.includes('mutation SyncProductFields')){writes.push({shop,...variables});const {input}=variables;
       for(const key of ['title','descriptionHtml','vendor','productType','tags','seo','handle','category'])if(key in input)p[key]=input[key];
@@ -120,7 +120,6 @@ test('stale previews, changed settings, child requests and unapproved stores can
     preview=await previewProduct(f.db,f.group,'SKU-0',f.env);f.env.INVENTORY_WRITE_ALLOWED_SHOPS=f.shops[0];await assert.rejects(applyProductPreview(f.db,f.group,preview.id,f.env),/disabled/);assert.equal(f.writes.length,0);
   }finally{f.close()}
 });
-test('product access status identifies the affected store and required file permission',async()=>{const f=await fixture(3);try{f.failure.scopes=new Map([[f.shops[1],['write_products']],[f.shops[2],[]]]);const status=await productAccessStatus(f.db,f.group,f.env,true);assert.deepEqual(status.map(item=>({shop:item.shop,ready:item.ready,missing:item.missing})),[{shop:f.shops[0],ready:true,missing:[]},{shop:f.shops[1],ready:false,missing:['read_files']},{shop:f.shops[2],ready:false,missing:['write_products','read_files']}])}finally{f.close()}});
 test('automatic image retries reuse deterministic files, preserve local videos and stop when disabled',async()=>{
   const f=await fixture();try{
     await saveProductSettings(f.db,f.group,['images','title'],true);await queueProduct(f.env,f.group.id,f.products.get(f.shops[0]).id);

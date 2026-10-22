@@ -19,7 +19,7 @@ import { shopsAllowedToWrite } from './write-policy.mjs';
 import { prepareConflictPreview } from './conflicts.mjs';
 import { inventoryPage } from './inventory-view.mjs';
 import { heartbeat, recordIssue, resolveIssue } from './operations.mjs';
-import { productSettings, saveProductSettings, previewProduct, applyProductPreview, queueProduct, processProductJob, queueProductCatalog, productAccessStatus, requiredProductScopes } from './product-sync.mjs';
+import { productSettings, saveProductSettings, previewProduct, applyProductPreview, queueProduct, processProductJob, queueProductCatalog } from './product-sync.mjs';
 import { saveProductInclusion } from './product-sync.mjs';
 import { productCollections } from './product-inclusion.mjs';
 import { refreshInventoryRules } from './inventory-refresh.mjs';
@@ -311,7 +311,6 @@ async function merchantApi(request, env, path) {
       await queueProductCatalog(env,group.id,'',{manual:true,revision:settings.revision});
       await db.prepare(`INSERT INTO sync_events(group_id,shop,event_type,detail) VALUES (?,?,'product_sync_requested','Manual product synchronization queued using saved inclusion rules. Results and errors appear in Product activity.')`).bind(group.id,group.main_shop).run();return json({ok:true});
     }
-    if(path==='/api/product-access'&&request.method==='GET'){const needsFiles=new URL(request.url).searchParams.get('files')==='1';const scopes=requiredProductScopes(needsFiles);const stores=await productAccessStatus(db,group,env,needsFiles);return json({requiredScopes:scopes,stores:stores.map(item=>({...item,approvalUrl:item.ready?null:`https://admin.shopify.com/store/${encodeURIComponent(item.shop.split('.')[0])}/oauth/install?client_id=${encodeURIComponent(env.SHOPIFY_CLIENT_ID)}&optional_scopes=${encodeURIComponent(scopes.join(','))}`}))})}
     if (path === '/api/product-access' && request.method === 'POST') {
       await saveToken(db,user.shop,await exchangeOfflineToken(user.shop,idToken,env),env);
       return json({ok:true});

@@ -177,11 +177,10 @@ export async function previewProduct(db,group,sku,env,createMissing=false){
 export async function canWrite(db,group,members,env,fields=[]){
   if(env.PRODUCT_WRITES_ENABLED!=='true'||!shopsAllowedToWrite(env,members.map(m=>m.shop)))fail('Product writes are disabled for this group');
   const subscription=await activeSubscription(db,group.main_shop,env);if(!subscription.active)fail('An active main-store subscription is required',402);await assertSkuPlan(db,group.id,subscription);
-  for(const member of members){const missing=await missingProductScopes(db,member.shop,env,fields.includes('images'));if(missing.length)fail(member.shop+': approve '+missing.join(' and ')+' for OnlineSync',403)}
+  for(const member of members){const scopes=await adminGraphql(db,member.shop,env,'query ProductScopes { currentAppInstallation { accessScopes { handle } } }');
+    const handles=scopes.currentAppInstallation.accessScopes.map(s=>s.handle);
+    if(!handles.includes('write_products')||fields.includes('images')&&!handles.includes('read_files'))fail(member.shop+': reopen OnlineSync and approve product access');}
 }
-export function requiredProductScopes(needsFiles=false){return needsFiles?['write_products','read_files']:['write_products']}
-async function missingProductScopes(db,shop,env,needsFiles=false){const scopes=await adminGraphql(db,shop,env,'query ProductScopes { currentAppInstallation { accessScopes { handle } } }');const handles=new Set(scopes.currentAppInstallation.accessScopes.map(scope=>scope.handle));return requiredProductScopes(needsFiles).filter(scope=>!handles.has(scope))}
-export async function productAccessStatus(db,group,env,needsFiles=false){const members=await connected(db,group.id);return Promise.all(members.map(async member=>{try{const missing=await missingProductScopes(db,member.shop,env,needsFiles);return {shop:member.shop,role:member.role,ready:missing.length===0,missing}}catch(error){return {shop:member.shop,role:member.role,ready:false,missing:requiredProductScopes(needsFiles),unavailable:true}}}))}
 export async function applyTarget(db,shop,target,plan,env){
   if(plan.input.files)plan={...plan,input:{...plan.input,files:await resolveProductFiles(db,shop,plan.input.files,env)}};
   if(Object.keys(plan.input).length){const data=await adminGraphql(db,shop,env,`mutation SyncProductFields($id:ProductSetIdentifiers!,$input:ProductSetInput!){productSet(identifier:$id,input:$input,synchronous:true){product{id} userErrors{field message}}}`,{id:{id:target.id},input:plan.input});if(data.productSet.userErrors.length||!data.productSet.product)fail('Product update was rejected: '+data.productSet.userErrors.map(e=>e.message).join('; '));}
